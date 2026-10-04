@@ -52,7 +52,7 @@ Write-Host ""
 Write-Host "智能体开发约束包 → $pkgDir" -ForegroundColor Cyan
 
 # ---------- 1. 目录 ----------
-foreach ($d in @($pkgDir, "$pkgDir\core", "$pkgDir\templates")) {
+foreach ($d in @($pkgDir, "$pkgDir\core", "$pkgDir\core\stacks", "$pkgDir\templates")) {
     New-Item -ItemType Directory -Force -Path $d | Out-Null
 }
 
@@ -60,6 +60,8 @@ foreach ($d in @($pkgDir, "$pkgDir\core", "$pkgDir\templates")) {
 Copy-Item "$src\core\DISTILL.md"     "$pkgDir\core\" -Force
 Copy-Item "$src\core\PRUNE.md"       "$pkgDir\core\" -Force
 Copy-Item "$src\core\MERGE.md"       "$pkgDir\core\" -Force
+# 技术栈坑位库（按语言分组：python / javascript / shell / git / platform）
+Copy-Item "$src\core\stacks\*"       "$pkgDir\core\stacks\" -Force
 Copy-Item "$src\templates\*"         "$pkgDir\templates\" -Force
 Copy-Item "$src\README.md"           "$pkgDir\" -Force
 Copy-Item "$src\CONTRIBUTING.md"     "$pkgDir\" -Force
@@ -153,9 +155,11 @@ else {
 # ---------- 5. 提示 ----------
 Write-Host ""
 Write-Host "完成。下一步：" -ForegroundColor Cyan
-Write-Host "  1. 打开 agent-constraints\core\constraints.md，删掉不适用的条目"
-Write-Host "     （尤其 L2 技术栈那节，替换成你自己的栈）"
-Write-Host "  2. 每完成一个功能/修完一个 bug，跑一次 core\DISTILL.md 的流程"
-Write-Host "  3. L0 超过 15 条时，跑一次 core\PRUNE.md"
-Write-Host "  4. 想把你的规则贡献回主库：跑 contribute.ps1，再按 CONTRIBUTING.md 提交"
+Write-Host "  1. 打开 core\constraints.md —— 删掉不适用的 L0 / L1 条目"
+Write-Host "     （重点看「快速定位 · 按症状查」表，那是出问题时的入口）"
+Write-Host "  2. 打开 core\stacks\ —— 技术栈坑位库，整组替换成你自己的栈"
+Write-Host "     （python / javascript / shell / git / platform）"
+Write-Host "  3. 每完成一个功能/修完一个 bug，跑一次 core\DISTILL.md 的流程"
+Write-Host "  4. L0 超过 15 条时，跑一次 core\PRUNE.md"
+Write-Host "  5. 想把你的规则贡献回主库：跑 contribute.ps1，再按 CONTRIBUTING.md 提交"
 Write-Host ""

@@ -46,13 +46,19 @@ PKG="$TARGET_ROOT/agent-constraints"
 echo ""
 echo "智能体开发约束包 → $PKG"
 
-mkdir -p "$PKG/core" "$PKG/templates"
+mkdir -p "$PKG/core" "$PKG/core/stacks" "$PKG/templates"
 
 # 1. 流程文档与模板：总是更新
 cp -f "$SRC/core/DISTILL.md" "$PKG/core/"
 cp -f "$SRC/core/PRUNE.md"   "$PKG/core/"
+cp -f "$SRC/core/MERGE.md"   "$PKG/core/"
+# 技术栈坑位库（按语言分组：python / javascript / shell / git / platform）
+cp -f "$SRC/core/stacks/"*   "$PKG/core/stacks/"
 cp -f "$SRC"/templates/*     "$PKG/templates/"
 cp -f "$SRC/README.md"       "$PKG/"
+cp -f "$SRC/CONTRIBUTING.md" "$PKG/"
+cp -f "$SRC/CHANGELOG.md"    "$PKG/"
+cp -f "$SRC/VERSION"         "$PKG/"
 echo "  ✓ 流程文档与模板已更新"
 
 # 2. 规则库：默认不覆盖

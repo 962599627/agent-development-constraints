@@ -171,28 +171,86 @@
 
 ---
 
-## L2 · 技术栈备忘
+## 快速定位 · 按症状查
 
-> 具体技术栈的坑。换项目时**按需替换**这一节，L0 保持不动。
+> **为什么有这个表**：出问题时，你手上拿的是**症状**（报错原文、异常现象），
+> 而不是"我现在在写哪个语言"。如果只能按语言分类，你还得多想一步"该翻哪一节"。
+>
+> **用法**：先在下面找到你的症状 → 直接翻对应文件，**不要通读**。
 
-- **Django**：跑测试时共享缓存会污染限流计数；`TruncDate`/`__date` 在 MySQL 时区表为空时返回 `NULL`
-- **DRF**：覆写 `get_permissions()` 会让 `@action(permission_classes=...)` 失效，必须显式列出每个动作
-- **simplejwt**：默认登录视图**没有限流**，直接暴露暴力破解面
-- **Vue**：`v-if` 与 `v-else` 之间不要插入其他节点；列表 `key` 用不可变 ID
-- **git**：`push`/`fetch` 报 `Failed to connect ... port 443` 超时，但 `curl` 能通
-  → 多半是 **HTTP/2 挂起**，执行 `git config http.version HTTP/1.1` 即可
-  （2026-04-25 实测：改完立刻推送成功）。可一并加
-  `http.postBuffer 524288000`、`http.lowSpeedLimit 0`、`http.lowSpeedTime 999999`
-- **PowerShell · 退出码会误报**：git 等外部程序把**进度信息写到 stderr** 时，
-  PowerShell 视为错误并令 `$LASTEXITCODE` 变成 1 —— **即使命令实际成功**。
-  判断成败要看 stdout 里的真实结果（如 `6d7eedb..0df40a8  HEAD -> main`），
-  不能只信退出码
-- **PowerShell · 脚本编码**：`.ps1` **必须带 UTF-8 BOM**，否则 Windows PowerShell 5.1
-  按 ANSI 读取 → 中文乱码 → 脚本解析失败
-- **PowerShell · 反引号陷阱**：双引号字符串里 `` ` `` 是转义符，`` `a `` 会被解析成 BEL 控制字符。
-  路径要用**单引号**字符串（实测踩过：注入的路径少了开头的 `a`，变成 `gent-constraints`）
-- **Windows**：`nul`/`con`/`aux` 是保留设备名，同名文件会让 `git add` **整体失败**；
-  提权进程需用 WMI 终止；普通路径无法访问保留名文件，要用 `\\?\` 前缀
+### 构建 / 命令 / 环境
+
+| 症状 | 很可能的原因 | 详见 |
+|---|---|---|
+| `Failed to connect ... port 443` 但 `curl` 能通 | git 在 HTTP/2 上挂起 | [`stacks/git.md`](stacks/git.md) |
+| 退出码 1，但命令实际成功了 | PowerShell 把 stderr 当错误 | [`stacks/shell.md`](stacks/shell.md) |
+| 脚本报语法错误 + 中文乱码（`鏅鸿兘`） | `.ps1` 缺 UTF-8 BOM | [`stacks/shell.md`](stacks/shell.md) |
+| 字符串少了字符（开头被吞） | 双引号里反引号是转义符 | [`stacks/shell.md`](stacks/shell.md) |
+| `bad interpreter` / `$'\r': command not found` | `.sh` 是 CRLF 行尾 | [`stacks/shell.md`](stacks/shell.md) |
+| `git add` **整体失败**、报某文件无法索引 | Windows 保留名文件（`nul` 等） | [`stacks/git.md`](stacks/git.md) |
+| 命令长时间无输出、像卡死 | 探测/重试循环等待过久 | [`stacks/shell.md`](stacks/shell.md) |
+| 改完代码**没生效** | 热重载被关闭 / 浏览器缓存 | [`stacks/python.md`](stacks/python.md) · R-008 |
+| 服务起不来 `Address already in use` | 端口被占 | [`stacks/platform.md`](stacks/platform.md) |
+| 首次 push 被拒 `(fetch first)` | 远程已有提交，需 rebase | [`stacks/git.md`](stacks/git.md) |
+
+### 测试
+
+| 症状 | 很可能的原因 | 详见 |
+|---|---|---|
+| **单独跑通过、放进整套就失败** | 跨请求共享状态（限流/缓存）污染 | **R-003** · **R-009** |
+| 大批用例报 403 / 429 | 同上 | **R-009** |
+| 加了限流却**完全不触发** | DEBUG 下缓存是 `DummyCache` | [`stacks/platform.md`](stacks/platform.md) |
+
+### 接口 / 数据 / 安全
+
+| 症状 | 很可能的原因 | 详见 |
+|---|---|---|
+| 未登录接口返回 `email` / `username` | 公开接口嵌了完整用户序列化器 | **R-007** |
+| `?xxx=abc` 返回 **500** | 用户可控参数未校验 | **R-006** |
+| `'int' object is not subscriptable` | 外键序列化成整数，前端当对象用 | [`stacks/python.md`](stacks/python.md) |
+| 密码 / 密钥出现在仓库里 | 硬编码；`.gitignore` 防不住**内容** | **R-001** · **R-002** |
+| 敏感值已在 git 历史里 | 改文件没用，要轮换凭据 | [`stacks/git.md`](stacks/git.md) |
+| 按日期分组**全是 NULL** | MySQL 时区表为空 | [`stacks/platform.md`](stacks/platform.md) |
+| 功能"看起来配好了"却走兜底 | 配置缺失被静默吞掉 | [`stacks/platform.md`](stacks/platform.md) |
+| 某个 action 该匿名却要求登录 | 覆写 `get_permissions()` 顶掉了 `@action` | [`stacks/python.md`](stacks/python.md) |
+
+### 界面 / 交互
+
+| 症状 | 很可能的原因 | 详见 |
+|---|---|---|
+| 点行内按钮**误触发跳转** | `<a>` 里嵌了 `<button>`（非法 HTML） | **R-005** |
+| **本人主页看不到"编辑"按钮** | 身份判断用了可变的展示名 | **R-004** |
+| 某页面功能"像没做" | 手工拼的响应对象漏了新字段 | [`stacks/javascript.md`](stacks/javascript.md) |
+| **两处数字对不上** | 缺一致性测试 | **R-011** |
+| bug 藏很久没人发现 | 数据有、但**缺交互入口** | **R-010** |
+| 列表错位 / 输入框内容串行 | `:key` 用了可变值 | [`stacks/javascript.md`](stacks/javascript.md) |
+| 递归更新 / 页面卡死 | watch 循环 | [`stacks/javascript.md`](stacks/javascript.md) |
+| 条件渲染两分支同时出现 | `v-if` 与 `v-else` 之间有其他节点 | [`stacks/javascript.md`](stacks/javascript.md) |
+
+**表里没有的症状** → 直接在 `stacks/` 下按语言找，或跑一次
+[`DISTILL.md`](DISTILL.md) 把它提炼成新条目（并**顺手补进这张表**）。
+
+---
+
+## L2 · 技术栈坑位库（按需加载）
+
+> **这一节已经拆成独立文件**，避免一次性读太多。
+>
+> 只在**命中上面的症状索引**、或**明确在改某个技术栈**时，才去翻对应文件。
+
+| 文件 | 覆盖范围 |
+|---|---|
+| [`stacks/python.md`](stacks/python.md) | Python / Django / DRF / simplejwt |
+| [`stacks/javascript.md`](stacks/javascript.md) | JS / TS / Vue / Vite |
+| [`stacks/shell.md`](stacks/shell.md) | PowerShell / bash |
+| [`stacks/git.md`](stacks/git.md) | git / 版本控制 |
+| [`stacks/platform.md`](stacks/platform.md) | Windows / MySQL / Docker / Redis |
+
+**每个坑都带「症状 → 原因 → 修法 → 来源」** —— 因为查的人是从症状进来的。
+换项目时**整组替换**这一层，L0 不动。
+
+**升级路径**：同一个坑被 **3 个独立项目**踩到 → 抽象成模式 → 升级进 **L0**
+（见 [`MERGE.md`](MERGE.md)）。
 
 ---
 
