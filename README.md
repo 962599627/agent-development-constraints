@@ -5,7 +5,7 @@
 A **self-evolving** constraint system for AI coding agents: it turns the mistakes you
 actually hit during development into rules that take effect the *next* time.
 
-**Version**: 0.4.0 · [Changelog](CHANGELOG.md)
+**Version**: 0.4.1 · [Changelog](CHANGELOG.md)
 
 ---
 
