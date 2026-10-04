@@ -64,6 +64,7 @@ Copy-Item "$src\core\MERGE.md"       "$pkgDir\core\" -Force
 Copy-Item "$src\core\stacks\*"       "$pkgDir\core\stacks\" -Force
 Copy-Item "$src\templates\*"         "$pkgDir\templates\" -Force
 Copy-Item "$src\README.md"           "$pkgDir\" -Force
+Copy-Item "$src\README.zh-CN.md"     "$pkgDir\" -Force
 Copy-Item "$src\CONTRIBUTING.md"     "$pkgDir\" -Force
 Copy-Item "$src\CHANGELOG.md"        "$pkgDir\" -Force
 Copy-Item "$src\VERSION"             "$pkgDir\" -Force

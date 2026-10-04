@@ -1,29 +1,33 @@
-# 智能体开发约束包
+# Agent Development Constraints
 
-一套**会自我进化**的开发约束系统：把开发中踩过的坑，自动沉淀成下次生效的规则。
+**English** | [中文](README.zh-CN.md)
 
-**当前版本**：0.1.0 · [变更日志](CHANGELOG.md)
+A **self-evolving** constraint system for AI coding agents: it turns the mistakes you
+actually hit during development into rules that take effect the *next* time.
 
----
-
-## 它解决什么问题
-
-大多数项目都有开发记录，但**记录 ≠ 约束**。典型症状：
-
-```
-job.md 写了 538 行开发记录
-└── 但"必须遵守"区只有 2 条
-```
-
-于是同样的坑反复踩 —— **教训只被"记录"了，没被"执行"**。
-
-本包打通「记录 → 规则 → 生效」这条链路，**并防止规则库自己膨胀成没人读的文档**。
+**Version**: 0.4.0 · [Changelog](CHANGELOG.md)
 
 ---
 
-## 快速开始
+## The problem it solves
 
-### 安装到项目
+Most projects keep a development log. But **a log is not a constraint**:
+
+```
+job.md: 538 lines of development history
+└── "Must follow" section: 2 rules
+```
+
+So the same mistakes get re-made. **Lessons were *recorded*, but never *enforced*.**
+
+This package closes the loop `log → rule → enforcement`, and — just as important —
+**keeps the rule library from bloating into a document nobody reads**.
+
+---
+
+## Quick start
+
+### Install into a project
 
 ```powershell
 # Windows
@@ -35,174 +39,224 @@ job.md 写了 538 行开发记录
 ./install.sh /path/to/project
 ```
 
-脚本是**幂等**的：
+The installer is **idempotent**:
 
-| 文件 | 重复安装时的行为 |
+| File | Behaviour on re-install |
 |---|---|
-| `core/constraints.md`（你的规则库） | **保留不覆盖** —— 这是你积累的资产 |
-| `core/DISTILL.md` / `PRUNE.md`（流程） | 更新（随包升级） |
-| `templates/` | 更新 |
-| `AGENTS.md` 的引用段 | 刷新（靠 HTML 标记定位，不会重复追加） |
+| `core/constraints.md` (your rule library) | **Kept, never overwritten** — it's your accumulated asset |
+| `core/DISTILL.md` / `PRUNE.md` / `MERGE.md`, `core/stacks/` | Updated (they ship with the package) |
+| `templates/` | Updated |
+| The reference block in `AGENTS.md` | Refreshed in place (located by HTML markers, never duplicated) |
 
-> 想连规则库一起覆盖加 `--force`（先备份）。不想改 `AGENTS.md` 加 `--skip-agents`。
+> Add `--force` to also overwrite the rule library (back it up first).
+> Add `--skip-agents` to leave `AGENTS.md` untouched.
 
-### 安装后做三件事
+### Three things to do after installing
 
-1. **打开 `agent-constraints/core/constraints.md`**，删掉不适用的条目 ——
-   尤其 **L2 技术栈**那节，整节替换成你自己的栈
-2. **在 `AGENTS.md` 里确认引用已注入**（脚本会自动加，找不到 `AGENTS.md` 就新建）
-3. **把规则库纳入版本管理**，它会随项目一起进化
+1. **Open `agent-constraints/core/constraints.md`** and delete what doesn't apply —
+   especially check the **"Locate by symptom"** table, that's your entry point when something breaks
+2. **Open `agent-constraints/core/stacks/`** — the tech-stack pitfall library
+   (`python` / `javascript` / `shell` / `git` / `platform`). Replace whole files with your own stack
+3. **Commit the rule library to version control** — it evolves with your project
 
-### 日常使用（关键）
+### Daily use (the important part)
 
 ```
-开发完成
+Feature done / bug fixed
    ↓
-问一句：这次有没有可以变成"下次自动生效"的约束？
-   ↓ 有                                   ↓ 没有
-跑 core/DISTILL.md 的流程提炼              结束
+Ask: is there anything here that should become a rule that fires automatically next time?
+   ↓ yes                                    ↓ no
+Run the DISTILL.md workflow                 Done
    ↓
-跑 core/PRUNE.md 检查是否超限
+Run the PRUNE.md workflow to check limits
    ↓
-更新 constraints.md + 变更日志
+Update constraints.md + changelog
 ```
 
 ---
 
-## 目录结构
+## Directory structure
 
 ```
 agent-constraints/
-├── README.md              本文件
-├── VERSION                版本号
-├── CHANGELOG.md           变更日志
-├── install.ps1            Windows 安装脚本（幂等）
-├── install.sh             Linux/macOS 安装脚本（幂等）
+├── README.md              English (this file)
+├── README.zh-CN.md        中文
+├── VERSION                Version
+├── CHANGELOG.md           Changelog (incl. the reasoning behind design decisions)
+├── CONTRIBUTING.md        How to contribute rules
+├── install.ps1 / .sh      Idempotent installer
+├── contribute.ps1 / .sh   Extracts *your* new rules using the install-time baseline
 ├── core/
-│   ├── constraints.md     ★ 规则库（唯一需要 AI 读的产物）
-│   ├── DISTILL.md         提炼流程 + 可复用提示词
-│   └── PRUNE.md           精简流程 + 可复用提示词
+│   ├── constraints.md     ★ The rule library — the only file the AI must read
+│   ├── DISTILL.md         How to distil rules from development history (+ prompt)
+│   ├── PRUNE.md           How to fight bloat (+ prompt)
+│   ├── MERGE.md           How maintainers merge community rules (+ prompt)
+│   └── stacks/            Tech-stack pitfalls, loaded on demand
+│       ├── python.md          Python / Django / DRF
+│       ├── javascript.md      JS / TS / Vue / Vite
+│       ├── shell.md           PowerShell / bash
+│       ├── git.md             git
+│       └── platform.md        Windows / MySQL / Docker / Redis
 ├── templates/
-│   ├── rule.md            单条规则模板（四要素）
-│   └── session-log.md     会话记录模板（提炼原料格式）
+│   ├── rule.md            Template for one rule (four required fields)
+│   └── session-log.md     Template for a session log (the raw material)
 └── examples/
-    └── python2-blog.md    真实使用示例：从某博客项目提炼出的规则
+    └── python2-blog.md    Real case study: rules distilled from a real project
 ```
 
 ---
 
-## 规则库的四层结构
+## Locate by symptom (the fast path)
 
-| 层 | 内容 | 上限 | 换项目时 |
-|---|---|---|---|
-| **L0 铁律** | 跨项目通用、代价高、**有自动化检查** | **15 条** | 保留 |
-| **L1 协作约定** | 人机 / 机机协作规则 | 无 | 保留 |
-| **L2 技术栈备忘** | 具体框架的坑 | 无 | **整节替换** |
-| **L3 归档** | 已失效的保留名字 | 无 | 保留 |
+The rule library opens with a **symptom index**, because when something breaks you
+are holding an **error message**, not the name of the language you're writing:
 
-**L0 的 15 条上限是硬约束** —— 约束的价值随长度递减，超了 AI 就开始忽略它们。
+| Symptom | Likely cause | Where |
+|---|---|---|
+| `Failed to connect ... port 443` but `curl` works | git hanging on HTTP/2 | `stacks/git.md` |
+| Exit code 1, but the command actually succeeded | PowerShell treating stderr as failure | `stacks/shell.md` |
+| Syntax error + mojibake (`鏅鸿兘`) | `.ps1` missing UTF-8 BOM | `stacks/shell.md` |
+| **Passes alone, fails in the full suite** | Shared state (rate limit / cache) pollution | **R-003 / R-009** |
+| **No "Edit" button on your own profile** | Identity check using a mutable display name | **R-004** |
+| Clicking an inline button **navigates the row** | `<a>` wrapping a `<button>` (invalid HTML) | **R-005** |
+| **Two numbers disagree** | Missing consistency assertion | **R-011** |
+
+Four groups: build/CLI/environment · testing · API/data/security · UI/interaction.
 
 ---
 
-## 每条规则的四要素
+## The four layers
+
+| Layer | Content | Limit | On a new project |
+|---|---|---|---|
+| **L0 Iron rules** | Cross-project, costly to violate, **automatable check** | **15** | Keep |
+| **L1 Collaboration** | Human↔agent / agent↔agent conventions | — | Keep |
+| **L2 Stack pitfalls** | Framework- and tool-specific traps | — | **Replace wholesale** (`core/stacks/`) |
+| **L3 Archive** | Retired rules, names kept | — | Keep |
+
+**The 15-rule cap on L0 is hard.** A constraint's value decreases with its length —
+past the cap, the agent starts ignoring them, and an ignored rule library is worse than none.
+
+---
+
+## The four required fields
 
 ```markdown
-### R-0XX 一句话规则名
-- **规则**：可执行的约束（禁止"注意…""尽量…"这类无法判断是否违反的表述）
-- **触发**：什么时候该想起来（列清单，越具体越好）
-- **检查**：怎么验证（**必须是一条命令 / grep / 断言**，不是"人工 review"）
-- **证据**：哪次真实踩坑换来的 + 代价
+### R-0XX One-line imperative name
+- **Rule**:      an executable constraint (no "be careful" / "try to" — those can't be checked)
+- **Trigger**:   when it should come to mind (list concrete situations)
+- **Check**:     how to verify (MUST be a command / grep / assertion — not "review manually")
+- **Evidence**:  the real incident that produced it + what it cost
 ```
 
-**为什么四个都要**：
+**Why all four**:
 
-| 缺了哪个 | 后果 |
+| Missing | Consequence |
 |---|---|
-| 规则 | 变成"注意安全"式的废话 |
-| 触发 | AI 想不起来，等于不存在 |
-| 检查 | 只能靠自觉，无法验证 |
-| 证据 | 后人不知道轻重，精简时会当废纸删掉 |
+| Rule | Becomes "be careful"-style noise |
+| Trigger | The agent never recalls it — equivalent to not existing |
+| Check | Only self-discipline; unverifiable |
+| Evidence | Future maintainers can't judge importance and delete it while pruning |
 
-**判据**：一条规则写完后，能写出一条**断言**或一条**命令**来抓违反吗？不能的话，它还没被想清楚。
+**Test**: once written, can you express the violation as a single **assertion** or **command**?
+If not, the rule isn't thought through yet.
 
 ---
 
-## 为什么用的人越多它越厉害
+## Why more users make it stronger
 
-这是本包的**核心机制**，不是口号。
+This is the **core mechanism**, not a slogan.
 
-**问题**：如果只在单个项目内闭环，每个项目各自积累规则、彼此不知道 ——
-**人多不产生任何额外价值**。
+**The problem**: if each project only closes its own loop, projects accumulate rules in
+isolation — **more users add nothing.**
 
-**解法：独立发现次数（independent sightings）**
+**The solution: independent sightings**
 
-一条规则的**可信度**，由「有多少个项目**各自独立**踩到同一个坑」决定：
+A rule's **credibility** is determined by *how many projects independently hit the same trap*:
 
-| 独立发现次数 | 层级 |
+| Independent sightings | Layer |
 |---|---|
-| 1 | L2 技术栈 / 项目内 |
-| 2 | L1 协作约定 |
-| **≥ 3** | **L0 铁律** |
-| 被 ≥2 个项目证伪 | 降级 / 归档 |
+| 1 | L2 stack pitfalls / project-local |
+| 2 | L1 collaboration |
+| **≥ 3** | **L0 iron rule** |
+| Refuted by ≥ 2 projects | Demoted / archived |
 
-**为什么有效**：不是投票，是**独立复现**。一条规则在一个项目出现可能是个例；
-在**三个独立项目**出现，说明它命中的是**普遍的人性或工具链缺陷**。
+**Why it works**: it is not voting, it is **independent reproduction**. A rule surfacing in
+one project may be a quirk; surfacing in **three independent projects** means it captures a
+**general human or toolchain failure mode**.
 
-**数据怎么流动**：
+**How data flows**:
 
 ```
-主仓库（精华规则）
+Main repository (distilled rules)
    ↓ install
-项目 A / B / C 各自积累踩坑经验
-   ↓ contribute（靠安装时的基线，自动识别你的新增）
-贡献包 → 维护者按 MERGE.md 合并
-   ↓ 抽象 + 独立发现次数 +1
-主仓库更新 → 再分发给所有人
+Projects A / B / C accumulate their own hard-won lessons
+   ↓ contribute (uses the install-time baseline to find *your* additions)
+Contribution bundle → maintainer merges per MERGE.md
+   ↓ abstract + independent sightings +1
+Main repository updated → redistributed to everyone
 ```
 
-**合并时的「抽象」是关键动作**：
+**Abstraction is the key step during merge**:
 
 ```
-候选 A：Django 的 settings.py 里别写数据库密码
-候选 B：Node 的 docker-compose.yml 里别写密码
-候选 C：文档里别记管理员密码
-        ↓ 抽象成上位规则（覆盖三种场景）
-R-001 凭据绝不硬编码（源码 / 配置 / 文档 / 模板 全都不行）    独立发现：3
+Candidate A: don't hardcode the DB password in Django's settings.py
+Candidate B: don't hardcode passwords in Node's docker-compose.yml
+Candidate C: don't record the admin password in docs
+        ↓ abstract into a higher-order rule (covers all three)
+R-001 Never hardcode credentials (source / config / docs / templates)   sightings: 3
 ```
 
-**副产品**：规则里的「来源」字段让规则**抗删** ——
-有 3 个来源的规则，没人在精简时敢随便删掉它。
+**Side effect**: the `Sources` field makes rules **deletion-resistant** —
+nobody dares prune a rule backed by three independent incidents.
 
-详见 [`core/MERGE.md`](core/MERGE.md)（维护者流程）与 [`CONTRIBUTING.md`](CONTRIBUTING.md)（贡献指南）。
+See [`core/MERGE.md`](core/MERGE.md) (maintainer flow) and
+[`CONTRIBUTING.md`](CONTRIBUTING.md) (contributor guide).
 
 ---
 
-## 设计理念
+## Design principles
 
-| 决策 | 理由 |
+| Decision | Rationale |
 |---|---|
-| 规则必须可执行 | 无法判断是否违反的规则等于没有 |
-| 必须留证据 | 证据是规则抗删的唯一依据 |
-| L0 设硬上限 | 短而准 > 长而全；宁可只留 10 条被遵守的 |
-| 只删被工具链替代的 | 归档成本极低，重新发现同一个坑的成本很高 |
-| 「本次未收录」要留痕 | 否则下次会有人重新提出同样的建议 |
-| 安装幂等 | 用户的规则库是资产，升级流程不能动它 |
-| 记录模板末尾带勾选项 | 开发记录最常见的失效方式是"写完没人回头看" |
+| Rules must be executable | A rule you can't check for violation might as well not exist |
+| Evidence is mandatory | Evidence is the only thing that keeps a rule from being deleted |
+| Hard cap on L0 | Short and accurate > long and complete; prefer 10 rules that are followed |
+| Only delete what tooling replaced | Archiving is nearly free; rediscovering a pitfall is expensive |
+| Record "not accepted" items | Otherwise the same suggestion gets re-proposed next time |
+| Idempotent installer | The user's rule library is an asset; upgrades must not touch it |
+| Checkbox at the end of the log template | The most common failure mode of a dev log is that nobody looks back at it |
+| Load stack pitfalls on demand | Context is scarce — a bloated library gets ignored wholesale |
 
 ---
 
-## 与开发记录的关系
+## Relationship to development logs
 
-本包**不替代**开发记录，而是它的下游：
+This package doesn't **replace** a development log — it's downstream of one:
 
 ```
-原始记录（会话 / job.md）      ← 又长又碎，人看，AI 不全读
+Raw logs (chat sessions / job.md)   ← long, fragmented; humans read, agents don't
         ↓ DISTILL
-约束库（constraints.md）       ← 短、准、可执行，AI 每次必读
+Rule library (constraints.md)       ← short, precise, executable; the agent always reads it
         ↓ PRUNE
-稳定精华                       ← 长期稳定，新项目直接复用
+Stable essence                      ← long-lived; copy it straight into new projects
 ```
 
-**判断一条信息该放哪**：
-- 只有**考古价值**（想回顾当时怎么做的）→ 留在开发记录里
-- **下次还会用上** → 提炼成规则
+**Where does a piece of information belong?**
+
+- **Archaeological value only** (how did we do it back then?) → keep it in the log
+- **Will be needed again** → distil it into a rule
+
+---
+
+## Contributing
+
+The most valuable contribution is: **"I independently hit a trap that's already in your library."**
+It adds +1 to that rule's independent sightings and can promote it from L1 to L0.
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md), or run `contribute.ps1` / `contribute.sh`
+inside your project to auto-extract the rules you added.
+
+## License
+
+See [LICENSE](LICENSE).
