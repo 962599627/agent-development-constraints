@@ -5,7 +5,7 @@
 A **self-evolving** constraint system for AI coding agents: it turns the mistakes you
 actually hit during development into rules that take effect the *next* time.
 
-**Version**: 0.4.1 · [Changelog](CHANGELOG.md)
+**Version**: 0.4.2 · [Changelog](CHANGELOG.md)
 
 ---
 
@@ -101,7 +101,7 @@ agent-constraints/
 │   ├── rule.md            Template for one rule (four required fields)
 │   └── session-log.md     Template for a session log (the raw material)
 └── examples/
-    └── python2-blog.md    Real case study: rules distilled from a real project
+    └── case-study-blog.md    Real case study: rules distilled from a real project
 ```
 
 ---
