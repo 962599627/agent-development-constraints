@@ -58,6 +58,7 @@ cp -f "$SRC"/templates/*     "$PKG/templates/"
 cp -f "$SRC/README.md"        "$PKG/"
 cp -f "$SRC/README.zh-CN.md"  "$PKG/"
 cp -f "$SRC/CONTRIBUTING.md" "$PKG/"
+cp -f "$SRC/PRIVACY.md"      "$PKG/"
 cp -f "$SRC/CHANGELOG.md"    "$PKG/"
 cp -f "$SRC/VERSION"         "$PKG/"
 

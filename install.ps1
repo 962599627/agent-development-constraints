@@ -66,6 +66,7 @@ Copy-Item "$src\templates\*"         "$pkgDir\templates\" -Force
 Copy-Item "$src\README.md"           "$pkgDir\" -Force
 Copy-Item "$src\README.zh-CN.md"     "$pkgDir\" -Force
 Copy-Item "$src\CONTRIBUTING.md"     "$pkgDir\" -Force
+Copy-Item "$src\PRIVACY.md"          "$pkgDir\" -Force
 Copy-Item "$src\CHANGELOG.md"        "$pkgDir\" -Force
 Copy-Item "$src\VERSION"             "$pkgDir\" -Force
 if (Test-Path "$src\contribute.ps1") { Copy-Item "$src\contribute.ps1" "$pkgDir\" -Force }

@@ -5,7 +5,7 @@
 A **self-evolving** constraint system for AI coding agents: it turns the mistakes you
 actually hit during development into rules that take effect the *next* time.
 
-**Version**: 0.5.0 · [Changelog](CHANGELOG.md)
+**Version**: 0.6.0 · [Changelog](CHANGELOG.md)
 
 ---
 
@@ -168,6 +168,27 @@ From then on every `git commit` scans **the files staged in that commit** and
 > ⚠️ **Why before the commit, not before publishing**: sanitization only counts
 > **at the moment content enters history**. Once committed it stays in `git log`
 > forever — editing the file later does not remove it (see **R-002**).
+
+---
+
+## What it will NOT do
+
+> It is meant to be **a student that keeps learning** — not a guard,
+> and certainly not something that pokes around your data.
+
+| It will **not** | How to verify |
+|---|---|
+| **Go online or upload anything** | Zero network calls — run `grep -rnE 'Invoke-WebRequest\|curl\|wget\|HttpClient\|smtp' --include='*.ps1' --include='*.sh' .` → **no output** |
+| **Read files outside your repo** | Only `git ls-files` and paths under `$ROOT`. No browser data, no env secrets, no SSH keys, no chats |
+| **Store, cache, or auto-commit** | Results print to the terminal only — no logs, no cache. `contribute` writes **one local file**; committing it is **your** decision |
+| **Learn your secrets** | The library accumulates **patterns** ("don't hardcode credentials"), never values. Test: would you be fine making the whole library public? |
+| **Lock you in** | The installer is idempotent — `constraints.md` is **never overwritten**. Delete the package anytime and keep your rules |
+
+**The core is learning**: the four-layer rule library plus the
+distill / merge / prune workflows. **Sanitization is an optional safety net** —
+delete `scripts/`, `.githooks/`, `.sanitize-deny.txt` and everything else still works.
+
+Full commitment: [PRIVACY.md](PRIVACY.md).
 
 ---
 

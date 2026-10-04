@@ -125,28 +125,35 @@ foreach ($f in $files) {
 }
 
 # ---------- 输出 ----------
+# 语气说明：这是一个**提醒**，不是审判。
+# 它的定位是"别把该留在家里的东西带出门"，不是"审查你"。
+# 所以输出刻意避免"违规""错误"这类字眼。
 Write-Host ""
 if ($findings.Count -eq 0) {
     Write-Host "脱敏检查通过（$checked 个文件，$($denyRules.Count) 条规则）" -ForegroundColor Green
     exit 0
 }
 
-Write-Host "发现 $($findings.Count) 处可能暴露自身安全的信息：" -ForegroundColor Red
+Write-Host "提醒：有 $($findings.Count) 处内容可能不适合带出去。" -ForegroundColor Yellow
+Write-Host "（这是安全网，不是审判 —— 确认无害就加进允许清单即可）" -ForegroundColor DarkGray
 Write-Host ""
 if (-not $Quiet) {
     $grouped = $findings | Group-Object File
     foreach ($g in $grouped) {
         Write-Host "  $($g.Name)" -ForegroundColor Yellow
         foreach ($x in $g.Group) {
-            Write-Host "    第 $($x.Line) 行  ←  规则: $($x.Rule)"
+            Write-Host "    第 $($x.Line) 行  ←  匹配: $($x.Rule)"
             Write-Host "      $($x.Text)" -ForegroundColor DarkGray
         }
     }
 }
 Write-Host ""
-Write-Host "处理方式（三选一）：" -ForegroundColor Cyan
+Write-Host "三种处理方式：" -ForegroundColor Cyan
 Write-Host "  1. 脱敏：把具体值改成通用描述（如 项目名 → 某项目）"
-Write-Host "  2. 若是无害示例：把它的特征加进 .sanitize-deny.txt 的允许清单（以 ! 开头）"
-Write-Host "  3. 若确实是误报：调整 .sanitize-deny.txt 里对应的正则"
+Write-Host "  2. 无害示例：把它的特征加进 .sanitize-deny.txt 的允许清单（以 ! 开头）"
+Write-Host "  3. 误报：调整 .sanitize-deny.txt 里对应的正则"
+Write-Host ""
+Write-Host "不想要这道检查？删掉 scripts/ .githooks/ .sanitize-deny.txt 即可，" -ForegroundColor DarkGray
+Write-Host "规则库与提炼流程照常工作 —— 脱敏是外围，学习才是内核。" -ForegroundColor DarkGray
 Write-Host ""
 exit 1

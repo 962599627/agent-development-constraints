@@ -89,11 +89,20 @@ if [ "$FINDINGS" -eq 0 ]; then
   exit 0
 fi
 
-echo "发现 $FINDINGS 处可能暴露自身安全的信息："
+# 语气：这是提醒，不是审判
+echo "提醒：有 $FINDINGS 处内容可能不适合带出去。"
+echo "（这是安全网，不是审判 —— 确认无害就加进允许清单即可）"
 echo ""
-echo "处理方式（三选一）："
+if [ "${QUIET:-0}" != "1" ]; then
+  echo "  详见上面的逐条输出"
+fi
+echo ""
+echo "三种处理方式："
 echo "  1. 脱敏：把具体值改成通用描述（如 项目名 → 某项目）"
-echo "  2. 若是无害示例：把它的特征加进 .sanitize-deny.txt 的允许清单（以 ! 开头）"
-echo "  3. 若确实是误报：调整 .sanitize-deny.txt 里对应的正则"
+echo "  2. 无害示例：把它的特征加进 .sanitize-deny.txt 的允许清单（以 ! 开头）"
+echo "  3. 误报：调整 .sanitize-deny.txt 里对应的正则"
+echo ""
+echo "不想要这道检查？删掉 scripts/ .githooks/ .sanitize-deny.txt 即可，"
+echo "规则库与提炼流程照常工作 —— 脱敏是外围，学习才是内核。"
 echo ""
 exit 1
