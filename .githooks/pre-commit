@@ -32,13 +32,18 @@ fi
 
 case "$checker" in
     *.ps1)
-        if command -v pwsh >/dev/null 2>&1; then
-            pwsh -NoProfile -File "$checker" -Path $files
-            exit $?
-        elif command -v powershell >/dev/null 2>&1; then
-            powershell -NoProfile -File "$checker" -Path $files
-            exit $?
-        fi
+        # ⚠️ 必须**逐个文件**传参：把多行文件名变量一次性交给 -Path，
+        #    PowerShell 只会收到第一个，后面的文件就静默漏检了（实测踩过——
+        #    一次 13 个文件的提交，hook 只报告检查了 1 个）。
+        rc=0
+        for f in $files; do
+            if command -v pwsh >/dev/null 2>&1; then
+                pwsh -NoProfile -File "$checker" -Path "$f" || rc=1
+            elif command -v powershell >/dev/null 2>&1; then
+                powershell -NoProfile -File "$checker" -Path "$f" || rc=1
+            fi
+        done
+        exit $rc
         ;;
     *.sh)
         sh "$checker" $files
