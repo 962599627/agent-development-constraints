@@ -5,7 +5,7 @@
 A **self-evolving** constraint system for AI coding agents: it turns the mistakes you
 actually hit during development into rules that take effect the *next* time.
 
-**Version**: 0.4.2 · [Changelog](CHANGELOG.md)
+**Version**: 0.5.0 · [Changelog](CHANGELOG.md)
 
 ---
 
@@ -122,6 +122,52 @@ are holding an **error message**, not the name of the language you're writing:
 | **Two numbers disagree** | Missing consistency assertion | **R-011** |
 
 Four groups: build/CLI/environment · testing · API/data/security · UI/interaction.
+
+---
+
+## Sanitization: checked automatically on every commit
+
+**Requirement**: nothing that exposes your own security posture may leave your machine.
+
+**This is enforced by mechanism, not discipline** — "remember to check" always fails eventually.
+
+```powershell
+# Enable once after installing
+.\agent-constraints\scripts\install-hooks.ps1
+```
+
+From then on every `git commit` scans **the files staged in that commit** and
+**refuses the commit** when something matches:
+
+```
+发现 1 处可能暴露自身安全的信息：
+  _hook_test.md
+    第 1 行  ←  规则: (?i)(密码|口令|密钥)\s*[:：=]\s*["']?[^\s"']{4,}
+      数据库密码: "your_password"
+```
+
+**Four categories are blocked**:
+
+| Category | Examples |
+|---|---|
+| Credentials | assigned passwords / secrets / tokens, `scheme://user:pass@`, private keys |
+| **Local paths** | `C:\Users\<name>`, project dirs on a dev drive — these leak your layout |
+| Personal data | email addresses, CN mobile numbers |
+| Project names | append your own to `.sanitize-deny.txt` |
+
+**Run manually**:
+
+```powershell
+.\agent-constraints\scripts\sanitize-check.ps1          # all tracked files
+.\agent-constraints\scripts\sanitize-check.ps1 -All     # include untracked (pre-open-source sweep)
+```
+
+**False positive?** Add the harmless pattern to the allow-list in `.sanitize-deny.txt`
+(lines starting with `!`) rather than loosening the rule.
+
+> ⚠️ **Why before the commit, not before publishing**: sanitization only counts
+> **at the moment content enters history**. Once committed it stays in `git log`
+> forever — editing the file later does not remove it (see **R-002**).
 
 ---
 

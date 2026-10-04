@@ -70,6 +70,18 @@ Copy-Item "$src\CHANGELOG.md"        "$pkgDir\" -Force
 Copy-Item "$src\VERSION"             "$pkgDir\" -Force
 if (Test-Path "$src\contribute.ps1") { Copy-Item "$src\contribute.ps1" "$pkgDir\" -Force }
 if (Test-Path "$src\contribute.sh")  { Copy-Item "$src\contribute.sh"  "$pkgDir\" -Force }
+
+# 脱敏检查（防止把自身安全信息推上去）—— 黑名单随包分发，可自行增删
+Copy-Item "$src\.sanitize-deny.txt"  "$pkgDir\" -Force
+New-Item -ItemType Directory -Force -Path "$pkgDir\scripts" | Out-Null
+Copy-Item "$src\scripts\*"           "$pkgDir\scripts\" -Force
+
+# ⚠️ git hooks 必须放在**目标项目根**（git 只认仓库根的 .githooks），
+#    放在 agent-constraints/ 下面是不会生效的
+if (Test-Path "$src\.githooks") {
+    New-Item -ItemType Directory -Force -Path "$targetRoot\.githooks" | Out-Null
+    Copy-Item "$src\.githooks\*" "$targetRoot\.githooks\" -Force
+}
 Write-Host "  ✓ 流程文档与模板已更新" -ForegroundColor Green
 
 # ---------- 3. 规则库（默认不覆盖）----------
@@ -163,4 +175,5 @@ Write-Host "     （python / javascript / shell / git / platform）"
 Write-Host "  3. 每完成一个功能/修完一个 bug，跑一次 core\DISTILL.md 的流程"
 Write-Host "  4. L0 超过 15 条时，跑一次 core\PRUNE.md"
 Write-Host "  5. 想把你的规则贡献回主库：跑 contribute.ps1，再按 CONTRIBUTING.md 提交"
+Write-Host "  6. 启用脱敏检查（每次提交自动拦截敏感信息）：scripts\install-hooks.ps1" -ForegroundColor Yellow
 Write-Host ""

@@ -60,6 +60,17 @@ cp -f "$SRC/README.zh-CN.md"  "$PKG/"
 cp -f "$SRC/CONTRIBUTING.md" "$PKG/"
 cp -f "$SRC/CHANGELOG.md"    "$PKG/"
 cp -f "$SRC/VERSION"         "$PKG/"
+
+# 脱敏检查（防止把自身安全信息推上去）
+cp -f "$SRC/.sanitize-deny.txt" "$PKG/"
+mkdir -p "$PKG/scripts"
+cp -f "$SRC/scripts/"* "$PKG/scripts/"
+
+# ⚠️ git hooks 必须放在**目标项目根**（git 只认仓库根的 .githooks）
+if [ -d "$SRC/.githooks" ]; then
+  mkdir -p "$TARGET_ROOT/.githooks"
+  cp -f "$SRC/.githooks/"* "$TARGET_ROOT/.githooks/"
+fi
 echo "  ✓ 流程文档与模板已更新"
 
 # 2. 规则库：默认不覆盖
@@ -108,8 +119,12 @@ fi
 
 echo ""
 echo "完成。下一步："
-echo "  1. 打开 agent-constraints/core/constraints.md，删掉不适用的条目"
-echo "     （尤其 L2 技术栈那节，替换成你自己的栈）"
-echo "  2. 每完成一个功能/修完一个 bug，跑一次 core/DISTILL.md 的流程"
-echo "  3. L0 超过 15 条时，跑一次 core/PRUNE.md"
+echo "  1. 打开 core/constraints.md —— 删掉不适用的 L0 / L1 条目"
+echo "     （重点看「快速定位 · 按症状查」表，那是出问题时的入口）"
+echo "  2. 打开 core/stacks/ —— 技术栈坑位库，整组替换成你自己的栈"
+echo "     （python / javascript / shell / git / platform）"
+echo "  3. 每完成一个功能/修完一个 bug，跑一次 core/DISTILL.md 的流程"
+echo "  4. L0 超过 15 条时，跑一次 core/PRUNE.md"
+echo "  5. 想把你的规则贡献回主库：跑 contribute.sh，再按 CONTRIBUTING.md 提交"
+echo "  6. 启用脱敏检查（每次提交自动拦截敏感信息）：scripts/install-hooks.sh"
 echo ""

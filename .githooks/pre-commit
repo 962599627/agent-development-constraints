@@ -1,0 +1,50 @@
+#!/bin/sh
+# 提交前自动脱敏检查
+# ------------------------------------------------------------
+# 目的：防止把自身安全信息（凭据、本地路径、个人信息、项目专名）推上去。
+#
+# 安装：scripts/install-hooks.ps1  或  scripts/install-hooks.sh
+#   （把 core.hooksPath 指到 .githooks，团队成员 clone 后跑一次即可）
+#
+# 绕过：git commit --no-verify
+#   ⚠️ 只在你确认没有敏感内容、且清楚原因时使用。
+
+# 只检查本次**暂存**的文件 —— 保持提交速度
+files=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$files" ] && exit 0
+
+root=$(git rev-parse --show-toplevel)
+
+# 依次尝试几个可能的位置：
+#  - 包被安装在子目录时（agent-constraints/scripts/）
+#  - 包就是仓库本身时（scripts/）
+# 两个位置都试，是为了让同一个 hook 在"作为工具被安装"和"本仓库自身"两种情况下都能用
+checker=""
+for dir in "$root/agent-constraints/scripts" "$root/scripts"; do
+    if [ -f "$dir/sanitize-check.ps1" ]; then checker="$dir/sanitize-check.ps1"; break; fi
+    if [ -f "$dir/sanitize-check.sh" ];  then checker="$dir/sanitize-check.sh";  break; fi
+done
+
+if [ -z "$checker" ]; then
+    echo "⚠️  找不到脱敏检查脚本，跳过（请先运行 scripts/install-hooks.*）" >&2
+    exit 0
+fi
+
+case "$checker" in
+    *.ps1)
+        if command -v pwsh >/dev/null 2>&1; then
+            pwsh -NoProfile -File "$checker" -Path $files
+            exit $?
+        elif command -v powershell >/dev/null 2>&1; then
+            powershell -NoProfile -File "$checker" -Path $files
+            exit $?
+        fi
+        ;;
+    *.sh)
+        sh "$checker" $files
+        exit $?
+        ;;
+esac
+
+echo "⚠️  没找到可用的 PowerShell，跳过脱敏检查" >&2
+exit 0
