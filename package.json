@@ -1,0 +1,56 @@
+{
+  "name": "agent-development-constraints",
+  "version": "0.7.0",
+  "description": "Self-evolving development constraints for AI coding agents — turn the mistakes you actually hit into rules that fire next time.",
+  "keywords": [
+    "ai",
+    "agent",
+    "agents-md",
+    "claude",
+    "cursor",
+    "constraints",
+    "rules",
+    "conventions",
+    "code-review",
+    "lessons-learned"
+  ],
+  "license": "MIT",
+  "bin": {
+    "agent-constraints": "bin/cli.js",
+    "adc": "bin/cli.js"
+  },
+  "files": [
+    "bin/",
+    "core/",
+    "templates/",
+    "examples/",
+    "scripts/",
+    ".githooks/",
+    ".sanitize-deny.txt",
+    "install.ps1",
+    "install.sh",
+    "contribute.ps1",
+    "contribute.sh",
+    "README.md",
+    "README.zh-CN.md",
+    "PRIVACY.md",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
+    "VERSION",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/962599627/agent-development-constraints.git"
+  },
+  "homepage": "https://github.com/962599627/agent-development-constraints#readme",
+  "bugs": {
+    "url": "https://github.com/962599627/agent-development-constraints/issues"
+  },
+  "scripts": {
+    "test": "node bin/cli.js version"
+  }
+}

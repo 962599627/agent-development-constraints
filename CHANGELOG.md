@@ -8,6 +8,58 @@
 
 ---
 
+## [0.7.0] - 2026-04-25
+
+### 新增：可 npx 安装的 npm 包
+
+**起因**：使用者在 GitHub 的「包」页面看到空白，问「还是空的」。
+
+先厘清了三个概念：
+
+| 区域 | 是什么 | 需要吗 |
+|---|---|---|
+| **Releases** | 版本化下载包 | 需要 |
+| **Packages** | npm / pip / Docker 那种 registry | **本版本做了** |
+| **Use this template** | 一键生成自己的仓库 | 仍然最推荐 |
+
+**做成 npm 包的好处**：把安装从「clone → 找脚本 → 传路径」变成**一行**：
+
+```bash
+npx agent-development-constraints install
+```
+
+**新增文件**
+
+- `package.json` —— 包元数据；`files` 白名单只含真正需要分发的东西（32 个文件 / 72 kB）
+- `bin/cli.js` —— CLI 入口，命令：`install` / `check` / `contribute` / `hooks` / `version` / `help`
+
+**设计原则：CLI 只做转交，不重新实现逻辑** ——
+否则 npx 版和 clone 版的行为会慢慢分叉。唯一例外是 `hooks`：
+安装脚本以"自身位置"找仓库根，在 npx 场景下那是 **npm 缓存目录**，
+所以 `hooks` 必须在**目标项目**里自己实现。
+
+**实测验证**
+
+| 场景 | 结果 |
+|---|---|
+| `node bin/cli.js version` / `help` | ✓ |
+| `install` 到临时项目 | ✓ 装出完整结构（含 core/stacks/ 6 个文件） |
+| `hooks` 到临时项目 | ✓ 写入**目标项目**的 .githooks，而非缓存目录 |
+| `npm pack --dry-run` | ✓ 32 个文件 / 72.1 kB，内容完整 |
+
+**过程中修掉两个 bug**
+
+1. **CLI 找错脚本位置**：`install`/`contribute` 在**包根目录**，
+   而 `sanitize-check`/`install-hooks` 在 `scripts/` 下 ——
+   我一开始统一按 `scripts/` 找，install 直接报"找不到"
+2. **`package.json` 的 `files` 漏了 4 个根目录脚本** ——
+   发布出去的包会缺少 install/contribute，**别人根本装不上**
+
+> 第 2 个尤其值得记：`npm pack --dry-run` 是**唯一**能在发布前发现这类问题的办法。
+> 只看本地文件都在，是发现不了的。
+
+---
+
 ## [0.6.0] - 2026-04-25
 
 ### 方向纠偏：它是「会学习的学生」，不是「防贼的工具」

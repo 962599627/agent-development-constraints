@@ -4,7 +4,7 @@
 
 一套**会自我进化**的开发约束系统：把开发中踩过的坑，自动沉淀成下次生效的规则。
 
-**当前版本**：0.6.0 · [变更日志](CHANGELOG.md)
+**当前版本**：0.7.0 · [变更日志](CHANGELOG.md)
 
 ---
 
@@ -26,6 +26,26 @@ job.md 写了 538 行开发记录
 ## 快速开始
 
 ### 安装到项目
+
+**一行命令，不用 clone：**
+
+```bash
+npx agent-development-constraints install
+```
+
+就这样 —— 规则库、三套流程、可选的安全网会落到 `./agent-constraints/`，
+并在你的 `AGENTS.md` 里加一段引用。
+
+其余命令：
+
+```bash
+npx agent-development-constraints check        # 脱敏检查（可选安全网）
+npx agent-development-constraints contribute   # 提取【你】新增的规则
+npx agent-development-constraints hooks        # 启用提交前检查
+npx agent-development-constraints help
+```
+
+**或者从 clone 安装**（效果相同 —— CLI 只是转交给这些脚本）：
 
 ```powershell
 # Windows

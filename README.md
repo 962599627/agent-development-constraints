@@ -5,7 +5,7 @@
 A **self-evolving** constraint system for AI coding agents: it turns the mistakes you
 actually hit during development into rules that take effect the *next* time.
 
-**Version**: 0.6.0 · [Changelog](CHANGELOG.md)
+**Version**: 0.7.0 · [Changelog](CHANGELOG.md)
 
 ---
 
@@ -28,6 +28,26 @@ This package closes the loop `log → rule → enforcement`, and — just as imp
 ## Quick start
 
 ### Install into a project
+
+**One line, no clone needed:**
+
+```bash
+npx agent-development-constraints install
+```
+
+That's it — the rules, the workflows and the optional safety net land in
+`./agent-constraints/`, and a reference block is added to your `AGENTS.md`.
+
+Other commands:
+
+```bash
+npx agent-development-constraints check        # sanitization check (optional safety net)
+npx agent-development-constraints contribute   # extract the rules *you* added
+npx agent-development-constraints hooks        # enable the pre-commit check
+npx agent-development-constraints help
+```
+
+**Or install from a clone** (same result — the CLI just forwards to these scripts):
 
 ```powershell
 # Windows
