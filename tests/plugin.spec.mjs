@@ -1,23 +1,32 @@
 /**
  * 插件契约测试
  *
- * 为什么要 stub：插件通过 peerDependency 引用 harness 提供的
- * `@deepseek-ai/dsh-tools`，独立 checkout 里没有它，直接 import 会失败。
- * 本测试先放一个最小 stub，再真实加载插件 —— 这样测的是**真实代码路径**，
- * 而不是把逻辑复制一份到测试里（那样测的只是复制的副本）。
+ * ## 这个文件的存在理由（一次真实事故）
+ *
+ * 第一版插件在真实 DSH 里**让宿主会话崩了**，报
+ * `Cannot read properties of undefined (reading 'kind')`。两个根因：
+ *
+ *  1. 顶层 `import { defineTool } from '@deepseek-ai/dsh-tools'`，而 profile 设了
+ *     `autoInstallPeers: false` —— peer 依赖不会被安装，模块解析失败，
+ *     加载器处理那行时拿到 undefined 就炸。
+ *  2. `parameters` 用了 `defineTool` 的 DSL 格式，而手写的 `parameters`
+ *     必须是 JSON Schema。
+ *
+ * 当时的测试之所以没挡住，是因为它**自己造了 stub** 让 import 成功 ——
+ * 于是测的是"我假想的环境"，而不是真实环境。
+ *
+ * 所以现在：
+ *  - **不建任何 stub**：插件必须零外部依赖就能加载（这正是第一条回归防线）
+ *  - 加了大量**畸形输入**用例：无论宿主传什么，插件都不许抛错
  */
 
-import { test, before, after } from 'node:test'
+import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, rmSync, existsSync, mkdtempSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const STUB_DIR = join(ROOT, 'node_modules', '@deepseek-ai', 'dsh-tools')
-
-let plugin
-let tempProject
 
 /** 造一个"已安装指令包"的项目目录，用来验证工具能定位规则库 */
 function makeInstalledProject() {
@@ -47,194 +56,257 @@ function makeInstalledProject() {
   return dir
 }
 
-before(() => {
-  // 放一个最小 stub，让 import 能解析到
-  mkdirSync(STUB_DIR, { recursive: true })
-  writeFileSync(
-    join(STUB_DIR, 'package.json'),
-    JSON.stringify({ name: '@deepseek-ai/dsh-tools', version: '0.0.0-stub', type: 'module', main: 'index.js' })
+function load() {
+  return import(pathToFileURL(join(ROOT, 'index.mjs')).href)
+}
+
+/** 造一个假的 ctx，收集注册与监听的调用 */
+function makeCtx() {
+  const tools = []
+  const handlers = {}
+  return {
+    tools: { register: (t) => tools.push(t) },
+    on: (evt, fn) => {
+      handlers[evt] = fn
+    },
+    _tools: tools,
+    _handlers: handlers,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 第一条回归防线：零外部依赖
+// ---------------------------------------------------------------------------
+
+test('【事故防线】插件不依赖任何外部包，无需 stub 即可加载', async () => {
+  // 这条曾经失败：插件顶层 import 了 @deepseek-ai/dsh-tools，
+  // 而那个包在 profile 里根本不会被安装。
+  const src = (await import('node:fs')).readFileSync(join(ROOT, 'index.mjs'), 'utf8')
+  const external = [...src.matchAll(/^import\s+[^'"]*from\s+['"]([^'"]+)['"]/gm)]
+    .map((m) => m[1])
+    .filter((spec) => !spec.startsWith('node:'))
+  assert.deepEqual(
+    external,
+    [],
+    `插件只能 import node: 内置模块，发现外部依赖: ${external.join(', ')}`
   )
-  writeFileSync(join(STUB_DIR, 'index.js'), 'export function defineTool(def) { return def }\n')
-})
 
-after(() => {
-  // 只删我们造的 stub 目录，不动别人的 node_modules
-  try { rmSync(join(ROOT, 'node_modules'), { recursive: true, force: true }) } catch {}
-  if (tempProject && existsSync(tempProject)) rmSync(tempProject, { recursive: true, force: true })
-})
-
-// ---------- 导出契约 ----------
-
-test('导出 DSH 插件需要的三个成员', async () => {
-  plugin = await import(pathToFileURL(join(ROOT, 'index.mjs')).href)
+  // 而且必须真的能加载（上面只是静态检查）
+  const plugin = await load()
   assert.equal(plugin.name, 'agent-development-constraints')
-  assert.deepEqual(plugin.inject, ['tools'])
   assert.equal(typeof plugin.apply, 'function')
 })
 
-// ---------- apply 的注册行为 ----------
+test('package.json 不声明会阻止安装的 peerDependencies', async () => {
+  const pkg = JSON.parse(
+    (await import('node:fs')).readFileSync(join(ROOT, 'package.json'), 'utf8')
+  )
+  // profile 的 pnpm-workspace.yaml 设了 autoInstallPeers: false，
+  // 声明 peerDep 等于声明一个永远装不上的依赖。
+  assert.equal(pkg.peerDependencies, undefined, '不该声明 peerDependencies')
+  assert.ok(pkg.dsh && pkg.dsh.bundle && pkg.dsh.bundle.patch, '必须声明 dsh.bundle')
+})
+
+// ---------------------------------------------------------------------------
+// 注册契约
+// ---------------------------------------------------------------------------
 
 test('apply 注册 constraints 工具并监听 agent/pre-step', async () => {
-  plugin = await import(pathToFileURL(join(ROOT, 'index.mjs')).href)
-  const tools = []
-  const events = []
-  plugin.apply({
-    tools: { register: (t) => tools.push(t) },
-    on: (e) => events.push(e),
-  })
+  const plugin = await load()
+  const ctx = makeCtx()
+  plugin.apply(ctx)
 
-  assert.equal(tools.length, 1, '应注册且只注册一个工具')
-  assert.equal(tools[0].name, 'constraints')
-  assert.deepEqual(events, ['agent/pre-step'], '应监听 agent/pre-step')
+  assert.equal(ctx._tools.length, 1, '应注册且只注册一个工具')
+  assert.equal(ctx._tools[0].name, 'constraints')
+  assert.deepEqual(Object.keys(ctx._handlers), ['agent/pre-step'])
 })
 
-// ---------- 工具行为 ----------
+test('工具的 parameters 是 JSON Schema，不是 defineTool 的 DSL', async () => {
+  const plugin = await load()
+  const ctx = makeCtx()
+  plugin.apply(ctx)
+  const params = ctx._tools[0].parameters
 
-test('工具能定位规则库并解析 L0 铁律', async () => {
-  plugin = await import(pathToFileURL(join(ROOT, 'index.mjs')).href)
-  const tools = []
-  plugin.apply({ tools: { register: (t) => tools.push(t) }, on: () => {} })
-  const tool = tools[0]
-
-  tempProject = makeInstalledProject()
-  const prev = process.cwd()
-  process.chdir(tempProject)
-  try {
-    const p = await tool.execute({ action: 'path' })
-    assert.ok(p.endsWith(join('agent-constraints', 'core', 'constraints.md')), `路径不对: ${p}`)
-
-    const l0 = await tool.execute({ action: 'l0' })
-    assert.match(l0, /R-001 凭据绝不硬编码/)
-    assert.match(l0, /R-002/)
-    // L1 的条目不能被当成铁律
-    assert.doesNotMatch(l0, /C-001/, 'L1 条目混进了 L0 输出')
-
-    const all = await tool.execute({ action: 'show' })
-    assert.match(all, /测试规则库/)
-  } finally {
-    process.chdir(prev)
-  }
+  // 第二条事故防线：手写 ToolDefinition 必须给 JSON Schema 形状。
+  assert.equal(params.type, 'object')
+  assert.ok(params.properties && params.properties.action, '应有 action 属性')
+  assert.deepEqual(params.required, ['action'], 'required 必须是数组')
+  assert.deepEqual(params.properties.action.enum, ['show', 'l0', 'path', 'where'])
+  // DSL 会写成 properties.action.required === true，那是错的
+  assert.notEqual(params.properties.action.required, true, '不该是 defineTool 的 DSL 形状')
 })
 
-test('未安装指令包时给出可操作的提示，而不是抛错', async () => {
-  plugin = await import(pathToFileURL(join(ROOT, 'index.mjs')).href)
-  const tools = []
-  plugin.apply({ tools: { register: (t) => tools.push(t) }, on: () => {} })
-  const tool = tools[0]
-
-  const empty = mkdtempSync(join(process.env.TEMP || '/tmp', 'adc-empty-'))
-  const prev = process.cwd()
-  process.chdir(empty)
-  try {
-    const msg = await tool.execute({ action: 'show' })
-    assert.match(msg, /没有安装 agent-constraints/)
-    assert.match(msg, /npx agent-development-constraints install/)
-  } finally {
-    process.chdir(prev)
-    rmSync(empty, { recursive: true, force: true })
-  }
+test('工具声明了 output.schema 与 render', async () => {
+  const plugin = await load()
+  const ctx = makeCtx()
+  plugin.apply(ctx)
+  const tool = ctx._tools[0]
+  assert.ok(tool.output && tool.output.schema, '必须有 output.schema')
+  assert.equal(typeof tool.output.render, 'function')
+  assert.equal(typeof tool.execute, 'function')
 })
 
-test('未知 action 抛错（走 dsh 工具管道的错误路径）', async () => {
-  plugin = await import(pathToFileURL(join(ROOT, 'index.mjs')).href)
-  const tools = []
-  plugin.apply({ tools: { register: (t) => tools.push(t) }, on: () => {} })
-  await assert.rejects(() => tools[0].execute({ action: 'nope' }), /unknown action/)
-})
+// ---------------------------------------------------------------------------
+// 工作目录解析（第三个真实坑）
+// ---------------------------------------------------------------------------
 
-// ---------- 契约回归：两个在真实 DSH 里踩到的坑 ----------
-
-test('【坑1】工具用 exec.agent 的会话 cwd 定位规则库，而不是 process.cwd()', async () => {
-  plugin = await import(pathToFileURL(join(ROOT, 'index.mjs')).href)
-  const tools = []
-  plugin.apply({ tools: { register: (t) => tools.push(t) }, on: () => {} })
-  const tool = tools[0]
+test('【坑】工具用 exec.agent 的会话 cwd 定位规则库，而不是 process.cwd()', async () => {
+  const plugin = await load()
+  const ctx = makeCtx()
+  plugin.apply(ctx)
+  const tool = ctx._tools[0]
 
   const project = makeInstalledProject()
+  const prevCwd = process.cwd()
   try {
-    // 关键：把 process.cwd() 指向一个**没有**规则库的地方，
-    // 只让 agent.session.header.cwd 指向有规则库的项目。
-    // 如果实现退回 process.cwd()，这条就会失败。
-    const prevCwd = process.cwd()
-    process.chdir(ROOT) // F:\agent-constraints 本身没有 agent-constraints/ 子目录
-    try {
-      const fakeAgent = { session: { header: { cwd: project } } }
-      const p = await tool.execute({ action: 'path' }, { agent: fakeAgent })
-      assert.ok(
-        p.startsWith(project),
-        `应当用会话 cwd 定位规则库，实际返回: ${p}`
-      )
-    } finally {
-      process.chdir(prevCwd)
-    }
+    // 把 process.cwd() 指向没有规则库的地方，只让会话 cwd 指向有规则库的项目。
+    // 若实现退回 process.cwd()，这条会失败。
+    process.chdir(ROOT)
+    const exec = { agent: { session: { header: { cwd: project } } } }
+    const p = await tool.execute({ action: 'path' }, exec)
+    assert.ok(p.startsWith(project), `应当用会话 cwd 定位规则库，实际返回: ${p}`)
   } finally {
+    process.chdir(prevCwd)
     rmSync(project, { recursive: true, force: true })
   }
 })
 
-test('【坑1】没有 agent 上下文时降级到 process.cwd()，不抛错', async () => {
-  plugin = await import(pathToFileURL(join(ROOT, 'index.mjs')).href)
-  const tools = []
-  plugin.apply({ tools: { register: (t) => tools.push(t) }, on: () => {} })
+test('没有 agent 上下文时降级到 process.cwd()，不抛错', async () => {
+  const plugin = await load()
+  const ctx = makeCtx()
+  plugin.apply(ctx)
 
-  // exec 缺失 / agent 缺失 / session 缺失 —— 都不该崩
-  for (const exec of [undefined, {}, { agent: {} }, { agent: { session: {} } }]) {
-    const msg = await tools[0].execute({ action: 'where' }, exec)
+  for (const exec of [undefined, null, {}, { agent: null }, { agent: {} }, { agent: { session: {} } }]) {
+    const msg = await ctx._tools[0].execute({ action: 'where' }, exec)
     const diag = JSON.parse(msg)
     assert.equal(typeof diag.cwd使用值, 'string')
     assert.ok(diag.cwd使用值.length > 0, '必须始终有一个可用的 cwd')
   }
 })
 
-test('where 动作返回解析诊断（排障用）', async () => {
-  plugin = await import(pathToFileURL(join(ROOT, 'index.mjs')).href)
-  const tools = []
-  plugin.apply({ tools: { register: (t) => tools.push(t) }, on: () => {} })
+// ---------------------------------------------------------------------------
+// 工具行为
+// ---------------------------------------------------------------------------
+
+test('工具能定位规则库并解析 L0 铁律', async () => {
+  const plugin = await load()
+  const ctx = makeCtx()
+  plugin.apply(ctx)
+  const tool = ctx._tools[0]
 
   const project = makeInstalledProject()
+  const prevCwd = process.cwd()
+  process.chdir(project)
   try {
-    const msg = await tools[0].execute(
-      { action: 'where' },
-      { agent: { session: { header: { cwd: project } } } }
-    )
-    const diag = JSON.parse(msg)
-    assert.equal(diag.agent可用, true)
-    assert.equal(diag.session可用, true)
-    assert.ok(String(diag.规则库).startsWith(project), '诊断里应给出找到的规则库路径')
+    const l0 = await tool.execute({ action: 'l0' })
+    assert.match(l0, /R-001 凭据绝不硬编码/)
+    assert.match(l0, /R-002/)
+    assert.doesNotMatch(l0, /C-001/, 'L1 条目混进了 L0 输出')
+
+    const all = await tool.execute({ action: 'show' })
+    assert.match(all, /测试规则库/)
   } finally {
+    process.chdir(prevCwd)
     rmSync(project, { recursive: true, force: true })
   }
 })
 
-test('【坑2】agent/pre-step 返回合法的 PreStepDecision，消息并入末尾', async () => {
-  plugin = await import(pathToFileURL(join(ROOT, 'index.mjs')).href)
-  const handlers = {}
-  plugin.apply({
-    tools: { register: () => {} },
-    on: (evt, handler) => { handlers[evt] = handler },
-  })
-  const handler = handlers['agent/pre-step']
-  assert.equal(typeof handler, 'function', '应当监听 agent/pre-step')
+test('未安装指令包时给出可操作的提示，而不是抛错', async () => {
+  const plugin = await load()
+  const ctx = makeCtx()
+  plugin.apply(ctx)
+
+  const empty = mkdtempSync(join(process.env.TEMP || '/tmp', 'adc-empty-'))
+  const prevCwd = process.cwd()
+  process.chdir(empty)
+  try {
+    const msg = await ctx._tools[0].execute({ action: 'show' })
+    assert.match(msg, /没有安装 agent-constraints/)
+    assert.match(msg, /npx agent-development-constraints install/)
+  } finally {
+    process.chdir(prevCwd)
+    rmSync(empty, { recursive: true, force: true })
+  }
+})
+
+test('未知 action 抛错（走 dsh 工具管道的错误路径）', async () => {
+  const plugin = await load()
+  const ctx = makeCtx()
+  plugin.apply(ctx)
+  await assert.rejects(() => ctx._tools[0].execute({ action: 'nope' }), /unknown action/)
+})
+
+// ---------------------------------------------------------------------------
+// 「绝不崩」防线 —— 宿主传什么都不能让会话失败
+// ---------------------------------------------------------------------------
+
+test('【事故防线】apply 在畸形 ctx 下不抛错，只降级', async () => {
+  const plugin = await load()
+  // 各种"宿主还没准备好"的情形
+  const badCtxList = [
+    {},
+    { tools: null },
+    { tools: {} }, // 没有 register
+    { tools: { register: () => { throw new Error('注册失败') } } },
+    { on: () => { throw new Error('监听失败') } },
+  ]
+  for (const [i, ctx] of badCtxList.entries()) {
+    assert.doesNotThrow(
+      () => plugin.apply(ctx),
+      `第 ${i} 个畸形 ctx 让 apply 抛错了 —— 这正是上次崩溃的形态`
+    )
+  }
+})
+
+test('【事故防线】pre-step 在畸形 next 返回值下原样透传，不抛错', async () => {
+  const plugin = await load()
+  const ctx = makeCtx()
+  plugin.apply(ctx)
+  const handler = ctx._handlers['agent/pre-step']
+
+  // 宿主可能返回任何东西；返回 undefined 正是上次崩溃的触发条件
+  const weirdReturns = [undefined, null, {}, { kind: 'reject' }, { kind: 'enter' }, { kind: 'enter', messages: null }]
+  for (const [i, value] of weirdReturns.entries()) {
+    const out = await handler({ agent: {} }, async () => value)
+    assert.deepEqual(
+      out,
+      value,
+      `第 ${i} 个返回值（${JSON.stringify(value)}）没有被原样透传 —— 改动宿主的决定会导致会话失败`
+    )
+  }
+})
+
+test('【事故防线】pre-step 的 next() 抛错时向上传播，不吞掉', async () => {
+  const plugin = await load()
+  const ctx = makeCtx()
+  plugin.apply(ctx)
+  const handler = ctx._handlers['agent/pre-step']
+
+  await assert.rejects(
+    () => handler({ agent: {} }, async () => { throw new Error('下游失败') }),
+    /下游失败/,
+    '下游的错误必须向上传播，插件不该改写别人的失败'
+  )
+})
+
+test('pre-step 返回合法的 PreStepDecision，人类输入留在最前', async () => {
+  const plugin = await load()
+  const ctx = makeCtx()
+  plugin.apply(ctx)
+  const handler = ctx._handlers['agent/pre-step']
 
   const project = makeInstalledProject()
   try {
-    const payload = {
-      agent: { session: { header: { cwd: project } } },
-      messages: [{ role: 'user', content: [{ type: 'text', text: '人类输入' }] }],
-      turn: 1,
-      step: 1,
-      signal: new AbortController().signal,
-    }
-    const original = { kind: 'enter', messages: payload.messages }
-    const decision = await handler(payload, async () => original)
+    const original = [{ role: 'user', content: [{ type: 'text', text: '人类输入' }] }]
+    const decision = await handler(
+      { agent: { session: { header: { cwd: project } } } },
+      async () => ({ kind: 'enter', messages: original })
+    )
 
-    // 必须仍是合法的 PreStepDecision
     assert.equal(decision.kind, 'enter')
-    assert.ok(Array.isArray(decision.messages))
-    // 人类输入必须还在最前（我们的提示只能追加在后面）
-    assert.equal(decision.messages[0], payload.messages[0], '人类输入不能被挤走')
-    // 必须多出一条注入
-    assert.equal(decision.messages.length, 2)
+    assert.equal(decision.messages[0], original[0], '人类输入不能被挤走')
+    assert.equal(decision.messages.length, 2, '应当追加一条注入')
+
     const injected = decision.messages[1]
     assert.equal(injected.role, 'user', 'UserMessage 必须带 role: "user"')
     assert.ok(Array.isArray(injected.content), 'UserMessage 必须带 content 数组')
@@ -245,31 +317,24 @@ test('【坑2】agent/pre-step 返回合法的 PreStepDecision，消息并入末
   }
 })
 
-test('【坑2】reject 决定原样透传，且不注入', async () => {
-  plugin = await import(pathToFileURL(join(ROOT, 'index.mjs')).href)
-  const handlers = {}
-  plugin.apply({
-    tools: { register: () => {} },
-    on: (evt, handler) => { handlers[evt] = handler },
-  })
-
+test('reject 决定原样透传，且不注入', async () => {
+  const plugin = await load()
+  const ctx = makeCtx()
+  plugin.apply(ctx)
   const rejected = { kind: 'reject' }
-  const decision = await handlers['agent/pre-step']({ agent: {} }, async () => rejected)
-  assert.deepEqual(decision, rejected, 'reject 必须原样返回，不能改成 enter')
+  const out = await ctx._handlers['agent/pre-step']({ agent: {} }, async () => rejected)
+  assert.deepEqual(out, rejected, 'reject 必须原样返回，不能改成 enter')
 })
 
-test('【坑2】没有规则库时不注入（保留原批次）', async () => {
-  plugin = await import(pathToFileURL(join(ROOT, 'index.mjs')).href)
-  const handlers = {}
-  plugin.apply({
-    tools: { register: () => {} },
-    on: (evt, handler) => { handlers[evt] = handler },
-  })
+test('没有规则库时不注入（保留原批次）', async () => {
+  const plugin = await load()
+  const ctx = makeCtx()
+  plugin.apply(ctx)
 
   const empty = mkdtempSync(join(process.env.TEMP || '/tmp', 'adc-nolib-'))
   try {
     const msgs = [{ role: 'user', content: [{ type: 'text', text: 'x' }] }]
-    const decision = await handlers['agent/pre-step'](
+    const decision = await ctx._handlers['agent/pre-step'](
       { agent: { session: { header: { cwd: empty } } } },
       async () => ({ kind: 'enter', messages: msgs })
     )

@@ -31,14 +31,7 @@
       "patch": "./cordis.patch.yml"
     }
   },
-  "peerDependencies": {
-    "@deepseek-ai/dsh-tools": "*"
-  },
-  "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-tools": {
-      "optional": true
-    }
-  },
+  "comment:zero-deps": "刻意不声明任何 @deepseek-ai/* 依赖：profile 里配了 autoInstallPeers:false，peer 依赖不会被安装，顶层 import 会直接让插件加载失败并拖垮宿主会话。见 index.mjs 文件头的「错误 1」。",
   "files": [
     "index.mjs",
     "cordis.patch.yml",
