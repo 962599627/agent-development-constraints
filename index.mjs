@@ -369,4 +369,59 @@ export function apply(ctx) {
 
   // ---------- 路线 B：直接注册（服务已就绪时的快路）----------
   registerTool(ctx, 'direct')
+
+  // ---------- 观察 `agent/pre-step` 的真实契约 ----------
+  //
+  // ## 为什么是"观察"而不是"注入"
+  //
+  // 上一次崩在这里（`Cannot read properties of undefined (reading 'kind')`）：
+  // 我"原样透传" `next()` 的结果，而宿主读 `decision.kind` ——
+  // 若 `next()` 给的是 `undefined`，透传 `undefined` 就崩。
+  //
+  // 但官方文档说 `next()` 必然返回 `PreStepDecision`。**两种说法矛盾。**
+  // 前面已经猜错三轮了，所以这次**不猜**：
+  //
+  //   - **只记录** decision 的真实形状（写进探针）
+  //   - 返回值**原样透传** —— 这是唯一诚实的做法：
+  //     我凭空造一个 decision 反而会篡改宿主的行为
+  //
+  // 拿到探针里的真实形状后，才有依据决定注入该怎么写。
+  if (ctx && typeof ctx.on === 'function') {
+    try {
+      ctx.on('agent/pre-step', async (payload, next) => {
+        let decision
+        try {
+          decision = await next()
+        } catch (err) {
+          writeProbe('pre-step-next-threw', { error: err && err.message })
+          throw err
+        }
+        try {
+          writeProbe('pre-step-observed', {
+            decisionType: typeof decision,
+            decisionIsUndefined: decision === undefined,
+            decisionIsNull: decision === null,
+            decisionKind:
+              decision && typeof decision === 'object' ? decision.kind : null,
+            decisionKeys:
+              decision && typeof decision === 'object' ? Object.keys(decision) : null,
+            messagesIsArray: Boolean(decision && Array.isArray(decision.messages)),
+            messagesLength:
+              decision && Array.isArray(decision.messages)
+                ? decision.messages.length
+                : null,
+            payloadKeys:
+              payload && typeof payload === 'object' ? Object.keys(payload) : null,
+            payloadHasAgent: Boolean(payload && payload.agent),
+          })
+        } catch {
+          // 探针失败不影响返回值
+        }
+        return decision
+      })
+      writeProbe('pre-step-listener-registered', { ok: true })
+    } catch (err) {
+      writeProbe('pre-step-listen-failed', { error: err && err.message })
+    }
+  }
 }

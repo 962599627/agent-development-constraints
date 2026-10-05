@@ -106,33 +106,74 @@ test('package.json 不声明会阻止安装的 peerDependencies', async () => {
 // 事故防线（二）：不监听任何事件
 // ---------------------------------------------------------------------------
 
-test('【事故2】apply 只注册工具，不监听任何事件', async () => {
+test('【事故2】apply 只注册工具 + 观察 pre-step，不监听其它事件', async () => {
   const plugin = await load()
   const ctx = makeCtx()
   plugin.apply(ctx)
 
   assert.equal(ctx._tools.length, 1, '应注册且只注册一个工具')
 
-  // ⚠️ 这条是本文件最重要的一条。
-  // pre-step 处理器曾用"原样透传 next() 结果"的写法，
+  // ⚠️ 从"完全不许监听"放宽到"只许监听 agent/pre-step"。
+  //
+  // 历史：pre-step 处理器曾用"原样透传 next() 结果"的写法，
   // 而 next() 返回 undefined 时透传 undefined → 宿主读 .kind 崩。
-  // 在拿到可靠契约之前，插件不许监听任何事件。
+  // 现在的策略是**只观察**（把 decision 的真实形状写进探针），
+  // 返回值仍然原样透传 —— 下面几条测试守着"不改返回值"这个不变量。
   assert.deepEqual(
     Object.keys(ctx._handlers),
-    [],
-    `插件不该监听任何事件，发现: ${Object.keys(ctx._handlers).join(', ')}`
+    ['agent/pre-step'],
+    `只允许监听 agent/pre-step，发现: ${Object.keys(ctx._handlers).join(', ')}`
   )
 })
 
-test('【事故2】源码里不得出现 ctx.on 调用', async () => {
+test('【事故2】pre-step 观察器必须原样返回 next() 的结果，绝不改写', async () => {
+  const plugin = await load()
+  const ctx = makeCtx()
+  plugin.apply(ctx)
+  const handler = ctx._handlers['agent/pre-step']
+  assert.equal(typeof handler, 'function', '应当注册 pre-step 观察器')
+
+  // 宿主可能返回任何东西。**任何情况下都必须原样返回** ——
+  // 一旦改写（把 undefined 换成别的东西，或反过来），就会篡改宿主的行为，
+  // 这正是上一轮崩溃的形态。
+  const cases = [
+    undefined,
+    null,
+    {},
+    { kind: 'reject' },
+    { kind: 'enter', messages: [] },
+  ]
+  for (const value of cases) {
+    const out = await handler({ agent: {} }, async () => value)
+    assert.deepEqual(
+      out,
+      value,
+      `${JSON.stringify(value)} 没有被原样返回（实际 ${JSON.stringify(out)}）`
+    )
+  }
+})
+
+test('【事故2】pre-step 的 next() 抛错时向上传播，不吞掉', async () => {
+  const plugin = await load()
+  const ctx = makeCtx()
+  plugin.apply(ctx)
+  await assert.rejects(
+    () =>
+      ctx._handlers['agent/pre-step']({ agent: {} }, async () => {
+        throw new Error('下游失败')
+      }),
+    /下游失败/,
+    '下游的错误必须向上传播，插件不该改写别人的失败'
+  )
+})
+
+test('【事故2】源码只允许监听 agent/pre-step', async () => {
   const src = readFileSync(join(ROOT, 'index.mjs'), 'utf8')
-  // 允许在注释里解释这件事，但不得有真正的 ctx.on 调用
-  const calls = [...src.matchAll(/ctx\.on\s*\(/g)]
-  assert.equal(
-    calls.length,
-    0,
-    '源码里出现了 ctx.on 调用 —— 若要做注入，必须先确认 next() 的返回契约，' +
-      '并保证任何情况下都返回合法的 PreStepDecision（绝不返回 undefined）'
+  const calls = [...src.matchAll(/ctx\.on\(\s*['"]([^'"]+)['"]/g)].map((m) => m[1])
+  assert.deepEqual(
+    calls,
+    ['agent/pre-step'],
+    `只允许监听 agent/pre-step，发现: ${calls.join(', ')}`
   )
 })
 
