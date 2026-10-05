@@ -163,6 +163,51 @@ test('host 通过读 VERSION 文件取版本，而不是写死', () => {
 })
 
 // ---------------------------------------------------------------------------
+// 语法自检
+// ---------------------------------------------------------------------------
+
+test('【防线】两个入口文件括号必须配平', () => {
+  // 为什么要有这条：本轮开发中，我用 edit 做局部替换时**两次破坏了括号结构**
+  // （一次吃掉 `)`，一次吃掉 `return h(`），而两次都得靠手动跑 node --check
+  // 才发现。测试套件里缺这一层，等于把最容易犯的错留给运气。
+  //
+  // 这里做的是保守的括号配平（跳过注释与字符串）——
+  // 它抓不住所有语法错误，但恰好能抓住"局部替换吃掉一个括号"这一类。
+  for (const rel of ['index.mjs', 'dsh/client.js']) {
+    const src = readFileSync(join(ROOT, rel), 'utf8')
+    const stripped = src
+      .replace(/\/\*[\s\S]*?\*\//g, '') // 块注释（含 JSDoc）
+      .replace(/(^|[^:\\])\/\/[^\n]*/g, '$1') // 行注释（避开 http://）
+
+    let depth = 0
+    let quote = null
+    for (let i = 0; i < stripped.length; i++) {
+      const ch = stripped[i]
+      if (quote) {
+        if (ch === '\\') i++
+        else if (ch === quote) quote = null
+        continue
+      }
+      if (ch === "'" || ch === '"' || ch === '`') quote = ch
+      else if (ch === '(' || ch === '{' || ch === '[') depth++
+      else if (ch === ')' || ch === '}' || ch === ']') depth--
+      if (depth < 0) {
+        assert.fail(`${rel} 在第 ${i} 个字符附近括号提前闭合（多了一个右括号）`)
+      }
+    }
+    assert.equal(depth, 0, `${rel} 括号不配平，余 ${depth} 个未闭合`)
+  }
+})
+
+test('【防线】client.js 能被解析（new Function 只解析不执行）', () => {
+  const src = readFileSync(join(ROOT, 'dsh', 'client.js'), 'utf8')
+  assert.doesNotThrow(() => {
+    // eslint-disable-next-line no-new-func
+    new Function(src)
+  }, 'dsh/client.js 语法错误')
+})
+
+// ---------------------------------------------------------------------------
 // 事故防线（二）：不监听任何事件
 // ---------------------------------------------------------------------------
 

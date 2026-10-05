@@ -493,6 +493,16 @@ function suggestDisable(exec, minTokens = 200) {
 let lastObservedCwd = null
 
 /**
+ * 上下文占用审计的缓存（只算一次）。
+ *
+ * ⚠️ 状态路由是 HTTP handler，**没有 agent/exec**，拿不到 ctx.tools.schemas()。
+ * 所以在 pre-step 里（那里有 payload.agent）算一次并缓存下来供卡片读取。
+ * 占用在会话内是稳定的（工具集不变），算一次就够 —— 每步重算会是
+ * C-011 说的那种常驻浪费。
+ */
+let lastAuditCache = null
+
+/**
  * 取会话的工作目录。
  *
  * ⚠️ 不要用 `process.cwd()` —— DSH 是 Electron 应用，插件进程的工作目录是
@@ -970,6 +980,42 @@ export function apply(ctx) {
             if (c && !lastObservedCwd) lastObservedCwd = c
             const pa = payload && payload.agent
             const psess = pa && pa.session
+            // 顺带把「上下文占用审计」算一次并缓存 —— 状态路由（HTTP handler）
+            // 里没有 agent/exec，拿不到 ctx.tools.schemas()，所以必须在这里算。
+            //
+            // ⚠️ 只算一次：schemas() + JSON.stringify 29 个工具不便宜，
+            // 而占用是会话内稳定的（工具集不变）。pre-step 每步都跑，
+            // 绝不能每步都重算（那是 C-011 说的常驻成本）。
+            if (!lastAuditCache) {
+              try {
+                const audit = auditToolSchemas({ agent: pa })
+                if (audit && !audit.error) {
+                  const sess = analyzeSession({ agent: pa })
+                  const used = {}
+                  if (sess && sess.工具调用) {
+                    for (const row of sess.工具调用.排名) used[row.name] = row.calls
+                  }
+                  let savable = 0
+                  const candidates = []
+                  for (const row of audit.all || []) {
+                    if (row.approxTokens < 200) continue
+                    if ((used[row.name] || 0) > 0) continue
+                    savable += row.approxTokens
+                    candidates.push(row.name)
+                  }
+                  lastAuditCache = {
+                    toolCount: audit.count,
+                    totalApproxTokens: audit.totalApproxTokens,
+                    savableApproxTokens: savable,
+                    candidates: candidates.slice(0, 8),
+                    candidateCount: candidates.length,
+                    sessionToolsUsed: sess && sess.工具调用 ? sess.工具调用.不同工具数 : null,
+                  }
+                }
+              } catch {
+                // 缓存失败不影响任何事
+              }
+            }
             writeProbe('cwd-probe', {
               got: c || null,
               agentKeys: pa ? Object.keys(pa) : null,
@@ -1168,6 +1214,8 @@ export function apply(ctx) {
                   injectEnabled: configInjectEnabled(),
                   configFile: CONFIG_FILE,
                   probeFile: join(homedir(), '.dsh', 'agent-constraints-probe.json'),
+                  // 上下文占用摘要（在 pre-step 里算一次并缓存；还没有就是 null）
+                  contextAudit: lastAuditCache,
                   // 成本摘要（卡片显示用；拿不到就是 null）
                   cost: usage
                     ? {

@@ -287,6 +287,59 @@ window.__ModuleLoader__.load({
           )
         }
 
+        // ---------- 上下文占用 + 建议关闭 ----------
+        // 这段数据由 host 在 pre-step 里算一次并缓存 —— 状态路由是 HTTP handler，
+        // 没有 agent，拿不到 ctx.tools.schemas()。
+        var audit = status && status.contextAudit
+        if (audit) {
+          var pct =
+            audit.totalApproxTokens > 0
+              ? Math.round((audit.savableApproxTokens / audit.totalApproxTokens) * 100)
+              : 0
+          var names = audit.candidates || []
+          children.push(
+            h(
+              'div',
+              {
+                key: 'audit',
+                style: {
+                  marginTop: '10px',
+                  padding: '10px 12px',
+                  border: '1px solid ' + palette.border,
+                  borderRadius: '10px',
+                  background: palette.bg,
+                },
+              },
+              row(
+                '工具 schema',
+                audit.totalApproxTokens + ' tokens/请求（' + audit.toolCount + ' 个工具）'
+              ),
+              row(
+                '本会话用过',
+                (audit.sessionToolsUsed != null ? audit.sessionToolsUsed : '?') + ' 个工具'
+              ),
+              row('可省', audit.savableApproxTokens + ' tokens/请求（' + pct + '%）'),
+              audit.candidateCount > 0
+                ? row(
+                    '建议关闭',
+                    audit.candidateCount +
+                      ' 个：' +
+                      names.slice(0, 4).join('、') +
+                      (audit.candidateCount > 4 ? ' 等' : '')
+                  )
+                : row('建议关闭', '无（本会话用过的工具都值得留）'),
+              h(
+                'div',
+                {
+                  key: 'hint',
+                  style: { color: palette.dim, fontSize: '11.5px', marginTop: '6px' },
+                },
+                '完整清单与关闭方式：让 AI 调用 cost(action="disable")'
+              )
+            )
+          )
+        }
+
         return h(
           'div',
           { style: { padding: isPage ? '0' : '12px 14px' } },
