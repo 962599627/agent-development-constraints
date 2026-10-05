@@ -1,6 +1,6 @@
 {
   "name": "agent-development-constraints",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Self-evolving development constraints for AI coding agents — installs a rule library and injects it into every step.",
   "keywords": [
     "ai",

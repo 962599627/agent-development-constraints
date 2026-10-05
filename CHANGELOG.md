@@ -8,6 +8,50 @@
 
 ---
 
+## [0.9.0] - 2026-10-05
+
+### 新增：DSH 插件形态 + 两条从真实事故中来的 L1 规则
+
+**起因**：让这个工具能上 DSH 插件市场（`awesome-dsh-plugin`），
+于是把它从「指令包 + CLI」改造成真正的 DSH 插件（`dsh.bundle` + `cordis.patch.yml`）。
+
+**改造过程本身出了事故，值得完整记录**：
+
+第一版插件装进真实 DSH 后，**直接让宿主会话崩溃**
+（`Cannot read properties of undefined (reading 'kind')`），使用者只能手动禁用。
+两个根因：
+
+1. **顶层 import 了装不上的包** —— `@deepseek-ai/dsh-tools` 声明在 `peerDependencies`，
+   而目标 profile 设了 `autoInstallPeers: false`，peer 依赖根本不会被安装。
+2. **参数 schema 格式错误** —— 用了 `defineTool` 的 DSL，而手写的 `ToolDefinition`
+   必须是 JSON Schema。
+
+**更值得记的是为什么测试没挡住**：测试自己造了那个包的 stub，
+于是 **11 个用例全绿**，而真实环境里根本没有它。
+**假依赖掩盖了真实的环境问题** —— 当时的全绿是有害的。
+
+据此新增：
+
+| 规则 | 内容 |
+|---|---|
+| **C-009** | 装进别人运行环境的代码，任何失败都只能降级，绝不能把宿主拖垮 |
+| **C-010** | 假依赖会掩盖真实的环境问题 |
+
+以及 L2 新文件 [`core/stacks/dsh-plugin.md`](core/stacks/dsh-plugin.md) ——
+DSH 插件开发的 7 个坑（宿主崩溃 / 加载 / 参数格式 / cwd / 注入 / 热替换 / 交付前自查），
+每条都带「症状」。
+
+**插件实现的关键取舍**：
+- **零外部依赖**：只 import `node:` 内置模块，任何人装上都不会因解析失败而崩
+- **`apply()` 全程 try/catch**：任何异常只让插件降级
+- **`pre-step` 只做最小介入**：`kind !== 'enter'` 时原样透传，不改写宿主的决定
+
+**测试**：16 个用例，其中 5 条是"绝不崩"防线 ——
+包括"不得有 `node:` 以外的 import"这条静态检查，以及 5 种畸形 `ctx`
+与 6 种畸形 `next()` 返回值下都必须只降级不抛错。
+
+---
+
 ## [0.7.0] - 2026-04-25
 
 ### 新增：可 npx 安装的 npm 包

@@ -22,6 +22,7 @@
 | [`shell.md`](shell.md) | bash / PowerShell | 转义、编码、退出码、行尾 |
 | [`git.md`](git.md) | git / git 托管平台 | 连接超时、历史、保留名 |
 | [`platform.md`](platform.md) | Windows / Linux / MySQL / Docker | 权限、路径、端口、服务 |
+| [`dsh-plugin.md`](dsh-plugin.md) | DSH 插件（cordis bundle） | 宿主崩溃、插件不加载、参数校验、注入不生效 |
 
 ## 往这里加内容的规则
 

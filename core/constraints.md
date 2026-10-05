@@ -212,6 +212,39 @@
 - **⚠️ 关键认知**：脱敏**只在内容被"写进去"的那一刻有效**。
   一旦提交，git 历史里就**永久留下**了（改文件没用，见 **R-002**）——
   所以检查必须发生在**提交之前**，而不是"公开之前"
+
+### C-009 装进别人运行环境的代码，任何失败都只能降级
+- **规则**：插件 / 库 / 中间件 / 钩子这类"跑在宿主里"的代码，
+  任何一段失败**只允许降级**（功能不可用），**绝不能把宿主拖垮**
+- **触发**：写插件入口、注册钩子、实现宿主回调、发布给别人安装的东西
+- **检查**：
+  1. 初始化入口（`apply()` 之类）**每一段**都包 try/catch
+  2. 宿主回调对**畸形输入**一律原样透传，不改写宿主的决定
+  3. 不在顶层 import"宿主承诺会提供"的包 —— **承诺不等于装上了**
+  4. 交付前在**真实宿主**里加载一次，而不是只跑单测
+- **证据**：agent-constraints 自身（2026-10-05）。插件顶层
+  `import { defineTool } from '@deepseek-ai/dsh-tools'`，而目标 profile 设了
+  `autoInstallPeers: false` → 该包从未被安装 → 模块解析失败 →
+  插件加载态 FAILED → **宿主会话直接崩溃**
+  （`Cannot read properties of undefined (reading 'kind')`），用户只能手动禁用
+- **代价**：用户的工作环境中断；信任受损（"装你的东西把我的应用搞崩了"）
+- **独立发现次数**：1（待更多项目验证后考虑升级 L0）
+
+### C-010 假依赖会掩盖真实的环境问题
+- **规则**：测试里造的 stub / mock，如果是为了让"本该存在的东西"看起来存在，
+  它同时屏蔽了**"它不存在"**这个最该被看到的信息
+- **触发**：为了让 import 成功、让测试跑起来而造 stub 时
+- **检查**：
+  1. 能用真实依赖就用真实的
+  2. 必须造 stub 时，**另加一条不用 stub 的用例**，或加静态检查
+     （例如"依赖清单里不得出现 `node:` 以外的外部包"）
+  3. 每次造 stub 前问一句：**"如果这个东西真的不存在，我的测试会红吗？"**
+     —— 如果不会，那这个 stub 正在掩盖问题
+- **证据**：同一次事故。插件测试原本自造 `@deepseek-ai/dsh-tools` 的 stub，
+  **11 个用例全绿**；而真实环境里没有那个包 → 加载失败、宿主崩溃。
+  事后回看：**当时的全绿是有害的** —— 它让人相信"已经验证过了"。
+  与 **C-002** 呼应：证据要能支撑结论，**假环境里的绿不算证据**
+- **独立发现次数**：1
 - **与 R-001 的关系**：R-001 防"**写**"（凭据别硬编码），
   C-008 防"**提交**"（连带路径、身份、项目名一起过筛）。两条互补
 
@@ -276,6 +309,17 @@
 | 递归更新 / 页面卡死 | watch 循环 | [`stacks/javascript.md`](stacks/javascript.md) |
 | 条件渲染两分支同时出现 | `v-if` 与 `v-else` 之间有其他节点 | [`stacks/javascript.md`](stacks/javascript.md) |
 
+### 插件 / 宿主集成
+
+| 症状 | 很可能的原因 | 详见 |
+|---|---|---|
+| **装完插件后宿主会话直接崩**（`reading 'kind'`） | 顶层 import 了装不上的包（peer 依赖不会被安装） | [`stacks/dsh-plugin.md`](stacks/dsh-plugin.md) · **C-009** |
+| 插件装了但**根本没被加载** | 只 `pnpm add` 了，没加进 `dsh.profile.bundles` | [`stacks/dsh-plugin.md`](stacks/dsh-plugin.md) |
+| 工具报**参数校验失败**、参数收不到 | `parameters` 用了 DSL 而不是 JSON Schema | [`stacks/dsh-plugin.md`](stacks/dsh-plugin.md) |
+| 插件说**找不到项目文件**，可文件明明在 | 用了 `process.cwd()`（Electron 下那是应用目录） | [`stacks/dsh-plugin.md`](stacks/dsh-plugin.md) |
+| 改了插件源码但**行为没变** | 没有 hmr，`node_modules` 变更不触发热替换 | **R-008** · [`stacks/dsh-plugin.md`](stacks/dsh-plugin.md) |
+| **测试全绿，真实环境却崩** | 测试自造的 stub 掩盖了"缺少依赖" | **C-010** |
+
 **表里没有的症状** → 直接在 `stacks/` 下按语言找，或跑一次
 [`DISTILL.md`](DISTILL.md) 把它提炼成新条目（并**顺手补进这张表**）。
 
@@ -291,6 +335,7 @@
 |---|---|
 | [`stacks/python.md`](stacks/python.md) | Python / Django / DRF / simplejwt |
 | [`stacks/javascript.md`](stacks/javascript.md) | JS / TS / Vue / Vite |
+| [`stacks/dsh-plugin.md`](stacks/dsh-plugin.md) | DSH 插件（cordis bundle）—— 宿主崩溃、加载、参数、注入 |
 | [`stacks/shell.md`](stacks/shell.md) | PowerShell / bash |
 | [`stacks/git.md`](stacks/git.md) | git / 版本控制 |
 | [`stacks/platform.md`](stacks/platform.md) | Windows / MySQL / Docker / Redis |
