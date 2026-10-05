@@ -5,7 +5,13 @@
 A **self-evolving** constraint system for AI coding agents: it turns the mistakes you
 actually hit during development into rules that take effect the *next* time.
 
-**Version**: 0.7.0 · [Changelog](CHANGELOG.md)
+**Version**: see [`VERSION`](VERSION) · [Changelog](CHANGELOG.md)
+
+> ⚠️ **这里刻意不写版本号。**
+> 曾经写的是 `0.7.0`，而 `VERSION` 早就走到 0.25 —— 十几个版本没人同步，
+> 用户在仓库首页看到的永远是旧版本。
+> 现在版本只有**一个来源**（`VERSION` 文件），README 只负责指过去。
+> 仓库测试 `【R-011】` 会扫 README/docs，再出现硬编码版本号就会失败。
 
 ---
 

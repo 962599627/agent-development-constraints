@@ -24,7 +24,15 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, writeFileSync, rmSync, readFileSync, mkdtempSync } from 'node:fs'
+import {
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  readFileSync,
+  readdirSync,
+  existsSync,
+  mkdtempSync,
+} from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -160,6 +168,56 @@ test('host 通过读 VERSION 文件取版本，而不是写死', () => {
   const src = readFileSync(join(ROOT, 'index.mjs'), 'utf8')
   assert.match(src, /function readOwnVersion/, '应有 readOwnVersion 函数')
   assert.match(src, /readOwnVersion\(\)/, '状态路由应调用它')
+})
+
+test('【R-011】README / docs 里不得硬编码版本号', () => {
+  // ------------------------------------------------------------------
+  // 为什么补这一条（2026-10-05，用户发现的）
+  //
+  // 上面那条"源码里不得硬编码版本号"只扫了 index.mjs 与 dsh/client.js，
+  // **没扫 README** —— 于是 README 里写着 `Version: 0.7.0`，
+  // 而 VERSION 早就走到 0.25，十几个版本没人同步。
+  // 用户在仓库首页看到的永远是 0.7.0，直接问"不是更新了吗？"
+  //
+  // 这就是 R-014 说的那件事：**一致性检查的范围太窄**，
+  // 会给出"我们有测试覆盖"的虚假信心。
+  // ------------------------------------------------------------------
+  const targets = [
+    join(ROOT, 'README.md'),
+    join(ROOT, 'README.zh-CN.md'),
+    join(ROOT, 'CONTRIBUTING.md'),
+  ]
+  const docsDir = join(ROOT, 'docs')
+  if (existsSync(docsDir)) {
+    for (const f of readdirSync(docsDir)) {
+      if (f.endsWith('.md')) targets.push(join(docsDir, f))
+    }
+  }
+
+  // 形如 `Version: 1.2.3` / `当前版本：1.2.3` / 裸的 1.2.3
+  const versionish = /\b\d+\.\d+\.\d+\b/
+  const offenders = []
+
+  for (const p of targets) {
+    if (!existsSync(p)) continue
+    const lines = readFileSync(p, 'utf8').split(/\r?\n/)
+    lines.forEach((line, i) => {
+      const trimmed = line.trim()
+      // 跳过引用块（`>`）：那里是**解释历史**的地方，允许提到旧版本号
+      if (trimmed.startsWith('>')) return
+      if (!versionish.test(line)) return
+      // 允许"版本只有一个来源"这类指向 VERSION 的写法：不含数字就不触发
+      offenders.push(`${p.replace(ROOT + '\\', '').replace(ROOT + '/', '')} 第 ${i + 1} 行: ${trimmed.slice(0, 90)}`)
+    })
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    '文档里出现了硬编码版本号 —— 版本只有一个来源（VERSION 文件），' +
+      '文档应当指向它而不是复述：\n' +
+      offenders.join('\n')
+  )
 })
 
 // ---------------------------------------------------------------------------
