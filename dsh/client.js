@@ -140,16 +140,22 @@ window.__ModuleLoader__.load({
         var setDiag = diagState[1]
 
         /**
-         * 拉状态，并在**数据还不完整时自动重试**。
+         * 拉状态，并在**数据还不完整时持续重试**。
          *
-         * ⚠️ 为什么必须有这个：`contextAudit` 由 host 在第一个
-         * `agent/pre-step` 时才具备 —— 如果用户打开设置页的时机早于
-         * 那条消息，卡片拿到的就是 null 快照，而卡片只在挂载时请求一次，
-         * **永远不会自己变好**。实测就是这样：host 数据早已正确，
-         * 卡片却一直空着，重启也没用。
+         * ⚠️ 为什么必须有这个：`contextAudit` / `cwdSource=session` 由 host 在
+         * **第一个 `agent/pre-step`** 时才具备。而用户完全可能在打开设置页之后
+         * 才发第一条消息 —— 更常见的是**先打开设置页看看，过一会儿才发消息**。
          *
-         * 重试策略：前 10 次每 1.5 秒一次（覆盖"发消息前后"那几秒），
-         * 拿到就停；之后不再打扰 —— 用户还可以用「刷新」按钮手动重取。
+         * 实测（v0.21.0 的诊断行）：
+         *   12:52:22 卡片拉取 -> cwdSource=process, hasAudit=false
+         *   12:52:37 重试窗口用完（10 次 × 1.5 秒）
+         *   12:53 前后 pre-step 才跑 -> host 数据齐了
+         *   但卡片已经不再请求 -> 永远停在 12:52:22 的旧快照
+         *
+         * ⚠️ 所以"有限次重试"这个设计本身就是错的：
+         * 我无法预知用户什么时候才会发出第一条消息。
+         * 改为**一直重试直到数据齐备**，间隔逐步放宽（1.5s -> 10s）以免打扰服务端。
+         * 组件卸载时清理定时器；数据齐备后自然停止。
          */
         react.useEffect(
           function () {
@@ -162,13 +168,7 @@ window.__ModuleLoader__.load({
                   if (!alive) return
                   setStatus(s)
                   // 诊断：记下**卡片实际拿到的**原始字段。
-                  // ⚠️ 为什么需要它：状态路由（curl）返回的是正确的
-                  // cwd=F:\python2 / cwdSource=session / contextAudit 有值，
-                  // 但卡片显示的是旧的 —— 两者矛盾，而我看不到卡片这一侧。
-                  // 有了这行就能区分三种情况：
-                  //   ① 时间在变、字段是旧的  -> 请求到了但 host 返回旧值
-                  //   ② 时间不变              -> 请求根本没发生
-                  //   ③ 字段是对的但没渲染    -> 渲染逻辑的 bug
+                  // 与 curl 结果对照，就能判断是"请求没发生"还是"服务端返回旧值"。
                   setDiag({
                     at: new Date().toLocaleTimeString(),
                     null: !s,
@@ -176,12 +176,14 @@ window.__ModuleLoader__.load({
                     cwdSource: (s && s.cwdSource) || null,
                     hasAudit: Boolean(s && s.contextAudit),
                     version: (s && s.version) || null,
+                    tries,
                   })
-                  // 数据齐全（或取不到状态）就停
+                  // 数据齐全就停；否则一直重试（间隔逐步放宽）
                   var complete = s && s.contextAudit && s.cwdSource === 'session'
-                  if (!complete && tries < 10) {
+                  if (!complete) {
                     tries++
-                    timer = setTimeout(load, 1500)
+                    var delay = tries <= 8 ? 1500 : 10000
+                    timer = setTimeout(load, delay)
                   }
                 })
                 .catch(function (e) {
@@ -377,11 +379,13 @@ window.__ModuleLoader__.load({
               },
               '诊断（数据未完整，此处显示卡片实际拿到的原始值）',
               h('br'),
-              '拉取于 ' + diag.at + '　version=' + diag.version,
+              '拉取于 ' + diag.at + '　version=' + diag.version + '　第 ' + (diag.tries || 0) + ' 次重试',
               h('br'),
               'cwd=' + (diag.cwd || 'null') + '　cwdSource=' + (diag.cwdSource || 'null'),
               h('br'),
-              'hasAudit=' + diag.hasAudit + '　status=' + (diag.null ? 'null' : 'ok')
+              'hasAudit=' + diag.hasAudit + '　status=' + (diag.null ? 'null' : 'ok'),
+              h('br'),
+              '（数据齐备前会持续重试；也可点「刷新」。第一条消息发出后数秒内应自动补齐）'
             )
           )
         }
