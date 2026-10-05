@@ -36,14 +36,46 @@
  *   - 不写任何东西：本文件没有任何 fs 写操作
  */
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { homedir } from 'node:os'
 
 export const name = 'agent-development-constraints'
 
-// 不声明 inject：工具注册表在 apply 时由 harness 挂到 ctx 上，
-// 显式 inject 反而会在服务名对不上时让插件卡在 PENDING。
-// 用 try/catch 探测 ctx.tools 更宽容。
+// 声明依赖工具服务：`ctx.tools` 就绪后才会调用 apply。
+// （此前故意不声明、改用 try/catch 探测 —— 结果是 tools 未就绪时静默跳过注册，
+//   工具不出现且没有任何线索，比直接失败更难查。）
+export const inject = ['tools']
+
+/**
+ * 诊断探针：把"插件到底加载了没有、ctx 里有什么"写到磁盘。
+ *
+ * 加它的原因：连续两轮"重启后工具不出现"，但**无法判断**是
+ *   ①插件压根没加载，还是 ②加载了但 ctx.tools 不可用 还是 ③注册了但没生效。
+ * 猜了两次都猜错（第一次怪 import，第二次怪 pre-step）。这次不猜了 —— 让插件自己说。
+ *
+ * 写在 `.dsh` 目录下，文件小、只在 apply 时写一次。
+ * 排查完可以删掉这个函数（见 README 的说明）。
+ */
+function writeProbe(stage, extra) {
+  try {
+    const info = {
+      stage,
+      time: new Date().toISOString(),
+      node: process.version,
+      cwd: process.cwd(),
+      pid: process.pid,
+      ...extra,
+    }
+    writeFileSync(
+      join(homedir(), '.dsh', 'agent-constraints-probe.json'),
+      JSON.stringify(info, null, 2),
+      'utf8'
+    )
+  } catch {
+    // 探针失败绝不影响插件
+  }
+}
 
 /** 规则库在整个项目里的相对位置 */
 const CONSTRAINTS_REL = join('agent-constraints', 'core', 'constraints.md')
@@ -257,12 +289,35 @@ export function apply(ctx) {
   //
   // 在拿到真实契约（或确认 `next()` 的返回形状）之前，这里选择**什么都不做**：
   // 少一个功能，换宿主绝对不崩。见 L1 的 C-009。
+  // 探针：先记录"apply 真的被调用了、ctx 里有什么"。
+  // 连续两轮"重启后工具不出现"都是靠猜（先猜 import，再猜 pre-step），
+  // 猜了两次都错。这次让插件自己把事实写下来。
+  writeProbe('apply-called', {
+    hasCtx: Boolean(ctx),
+    ctxKeys: ctx ? Object.keys(ctx) : null,
+    hasTools: Boolean(ctx && ctx.tools),
+    toolsKeys: ctx && ctx.tools ? Object.keys(ctx.tools) : null,
+    hasOn: Boolean(ctx && typeof ctx.on === 'function'),
+  })
+
   try {
     if (ctx && ctx.tools && typeof ctx.tools.register === 'function') {
       ctx.tools.register(buildConstraintsTool())
+      writeProbe('tool-registered', {
+        hasTools: true,
+        toolsKeys: Object.keys(ctx.tools),
+      })
+    } else {
+      // 这条分支以前是静默的 —— 正是"工具不出现却没线索"的根源
+      writeProbe('tool-register-skipped', {
+        reason: !ctx ? 'ctx 为空' : !ctx.tools ? 'ctx.tools 不存在' : 'ctx.tools.register 不是函数',
+        ctxKeys: ctx ? Object.keys(ctx) : null,
+        toolsKeys: ctx && ctx.tools ? Object.keys(ctx.tools) : null,
+      })
     }
   } catch (err) {
     // 注册失败只让工具不可用，绝不影响会话
+    writeProbe('tool-register-failed', { error: err && err.message })
     try {
       console.warn('[agent-constraints] 工具注册失败（插件降级，会话不受影响）:', err && err.message)
     } catch {}
