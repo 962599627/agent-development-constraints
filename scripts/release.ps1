@@ -19,7 +19,18 @@ param(
   [switch]$DryRun
 )
 
-$ErrorActionPreference = 'Stop'
+# ⚠️ 这里用 'Continue' 而不是 'Stop'。
+#    原因：`git push` 会把进度写到 **stderr**，而 PowerShell 在
+#    $ErrorActionPreference='Stop' 下会把原生命令的 stderr 当成
+#    NativeCommandError 当场中断 —— 实测推送已经成功了，
+#    脚本却报失败并停在了打标签之前。
+#    （规则库 stacks/shell.md 记录过："退出码 1，但命令实际成功了"。）
+#    正确性不受影响：每个关键步骤都用 $LASTEXITCODE 显式判断，
+#    失败时调 Fail() 退出。
+$ErrorActionPreference = 'Continue'
+
+# 原生命令的 stderr 不要触发 NativeCommandError（PS 7.3+ 才有该变量）
+if ($PSVersionTable.PSVersion.Major -ge 7) { $PSNativeCommandUseErrorActionPreference = $false }
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
@@ -45,7 +56,7 @@ Write-Host "[2/5] 脱敏检查"
 # ⚠️ 直接调用脚本文件，**不要**再起一个 `pwsh -File`：
 #    很多 Windows 上只有 powershell.exe 而没有 pwsh（PATH 里找不到），
 #    用外部进程会让这一步莫名失败。当前宿主能跑就直接跑。
-& (Join-Path $PSScriptRoot 'sanitize-check.ps1') 2>&1 | Out-Null
+& (Join-Path $PSScriptRoot 'sanitize-check.ps1') *>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) { Fail "脱敏检查失败（C-008 要求提交前必过）" }
 Ok "脱敏检查通过"
 

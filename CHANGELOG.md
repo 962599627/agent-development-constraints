@@ -8,6 +8,28 @@
 
 ---
 
+## [0.26.4] - 2026-10-05
+
+### 发版脚本被 PowerShell 的 stderr 误判中断
+
+**原因**：`scripts/release.ps1` 开头是 `$ErrorActionPreference = 'Stop'`，
+而 `git push` 会把进度写到 **stderr**；PowerShell 在该设置下把原生命令的
+stderr 当作 `NativeCommandError` 抛出并中断脚本。
+（规则库 `stacks/shell.md` 已记录此类症状：退出码 1，但命令实际成功了。）
+
+**问题**：0.26.3 发版时 `git push origin main` **实际成功**，脚本却报失败并停在
+打标签之前 —— 远端 `main` 已更新而标签缺失，分支与标签不一致。
+
+**解决方法**：
+- 改为 `$ErrorActionPreference = 'Continue'`；正确性由每步显式
+  `$LASTEXITCODE` 判断 + `Fail()` 退出保证；PS 7.3+ 另关闭
+  `$PSNativeCommandUseErrorActionPreference`
+- 脱敏检查的调用改用 `*>&1`，接住所有输出流
+- 补打 `v0.26.3` 标签并推送
+- 本次发版（0.26.4）用它真跑一遍，验证修复有效
+
+---
+
 ## [0.26.3] - 2026-10-05
 
 ### 改动只进了源码，没进宿主实际加载的那一份
