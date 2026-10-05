@@ -2,5 +2,5 @@ url: https://github.com/962599627/agent-development-constraints
 name: 962599627/agent-development-constraints
 category: dev
 description:
-  en: Installs a self-evolving development-constraints rule library into a project and exposes it to the agent through a constraints tool.
-  zh: 把一套会自我进化的开发约束规则库装进项目，并通过 constraints 工具供智能体读取。
+  en: Installs a self-evolving development-constraints rule library and exposes it to the agent through a constraints tool plus a once-per-session reminder.
+  zh: 把一套会自我进化的开发约束规则库装进项目，通过 constraints 工具和「每会话一次」的提醒交给智能体。
