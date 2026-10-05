@@ -182,17 +182,11 @@ test('【R-011】README / docs 里不得硬编码版本号', () => {
   // 这就是 R-014 说的那件事：**一致性检查的范围太窄**，
   // 会给出"我们有测试覆盖"的虚假信心。
   // ------------------------------------------------------------------
-  const targets = [
-    join(ROOT, 'README.md'),
-    join(ROOT, 'README.zh-CN.md'),
-    join(ROOT, 'CONTRIBUTING.md'),
-  ]
-  const docsDir = join(ROOT, 'docs')
-  if (existsSync(docsDir)) {
-    for (const f of readdirSync(docsDir)) {
-      if (f.endsWith('.md')) targets.push(join(docsDir, f))
-    }
-  }
+  // ⚠️ 只扫 **README**（中英），不扫 CONTRIBUTING / docs：
+  //    真正会漂移的是"仓库首页声称的当前版本"（README 里那句 Version: 0.7.0）。
+  //    散文里引用**历史**版本号是合理的（如"从 0.25.0 起生效"），
+  //    把它也判成违规会逼着人绕开正常表述 —— 第一版就把 CONTRIBUTING 误伤了。
+  const targets = [join(ROOT, 'README.md'), join(ROOT, 'README.zh-CN.md')]
 
   // 形如 `Version: 1.2.3` / `当前版本：1.2.3` / 裸的 1.2.3
   const versionish = /\b\d+\.\d+\.\d+\b/
@@ -766,5 +760,107 @@ test('【发布】所有 .ps1 必须带 UTF-8 BOM（否则中文乱码 + 解析�
     const hasBom = buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf
     if (!hasBom) bad.push(p.replace(ROOT + '\\', '').replace(ROOT + '/', ''))
   }
-  assert.deepEqual(bad, [], `以下 .ps1 缺 UTF-8 BOM（Windows PowerShell 会把中文读成乱码）：\n${bad.join('\n')}`)
+  assert.deepEqual(bad, [], `以下 .ps1 缺 UTF-8 BOM（Windows PowerShell 会把中文读成乱码）：\n${bad.join('\n')}\n修复：pwsh scripts/fix-bom.ps1`)
+})
+
+
+// ---------------------------------------------------------------------------
+// 变更日志格式（用户："我感觉你再讲故事 正常应该是 因为什么原因 造成什么
+// 问题 解决方法吧"）
+//
+// 规则库 C-004（记录要沉淀成规则，不能只写故事）本来就规定了这件事，
+// 但没有可执行的格式约束，于是 0.25.0 ~ 0.26.1 又写成了叙事文。
+// 这里把格式变成会失败的测试。
+// ---------------------------------------------------------------------------
+
+test('【变更日志】0.25.0 起每个版本条目必须写「原因 / 问题 / 解决方法」', () => {
+  const text = readFileSync(join(ROOT, 'CHANGELOG.md'), 'utf8')
+  const lines = text.split(/\r?\n/)
+
+  // 只检查 0.25.0 及之后的条目 —— 更早的条目是历史写法，本轮不追溯重写
+  const MIN = [0, 25, 0]
+  const older = (v) => {
+    const p = v.split('.').map(Number)
+    for (let i = 0; i < 3; i++) {
+      if (p[i] !== MIN[i]) return p[i] < MIN[i]
+    }
+    return false
+  }
+
+  // 切成 [版本, 小节名, 小节正文]
+  let version = null
+  let section = null
+  const sections = []
+  for (const line of lines) {
+    const v = /^##\s+\[(\d+\.\d+\.\d+)\]/.exec(line)
+    if (v) {
+      version = v[1]
+      section = null
+      continue
+    }
+    const h = /^###\s+(.+?)\s*$/.exec(line)
+    if (h) {
+      section = { version, name: h[1], body: [] }
+      sections.push(section)
+      continue
+    }
+    if (section) section.body.push(line)
+  }
+
+  const checked = sections.filter((s) => s.version && !older(s.version))
+  assert.ok(checked.length >= 4, `待检查的小节太少（${checked.length}）—— 解析可能出错`)
+
+  const bad = []
+  for (const s of checked) {
+    const body = s.body.join('\n')
+    const missing = []
+    if (!/\*\*原因\*\*/.test(body)) missing.push('原因')
+    if (!/\*\*问题\*\*/.test(body)) missing.push('问题')
+    if (!/\*\*解决方法\*\*/.test(body)) missing.push('解决方法')
+    if (missing.length) bad.push(`[${s.version}] ${s.name} —— 缺 ${missing.join('、')}`)
+  }
+  assert.deepEqual(
+    bad,
+    [],
+    '以下条目不符合「原因 / 问题 / 解决方法」结构（见 templates/changelog-entry.md）：\n' +
+      bad.join('\n')
+  )
+})
+
+test('【变更日志】条目里不许出现叙事化措辞', () => {
+  // 格式对了但语气还是故事也不行。这些词是这次被用户点名的写法。
+  //
+  // ⚠️ 范围必须按**版本号**过滤，不能按"从 0.25.0 那一行往后切"：
+  //    CHANGELOG 是新版本在前，从 0.25.0 往后切会把 0.24.0 及更早的历史
+  //    条目一起扫进来（它们用的是叙事写法）—— 第一版就是这么写错的。
+  const text = readFileSync(join(ROOT, 'CHANGELOG.md'), 'utf8')
+  const lines = text.split(/\r?\n/)
+
+  const MIN = [0, 25, 0]
+  const isOld = (v) => {
+    const p = v.split('.').map(Number)
+    for (let i = 0; i < 3; i++) {
+      if (p[i] !== MIN[i]) return p[i] < MIN[i]
+    }
+    return false
+  }
+
+  let version = null
+  const relevant = []
+  for (const line of lines) {
+    const v = /^##\s+\[(\d+\.\d+\.\d+)\]/.exec(line)
+    if (v) {
+      version = v[1]
+      continue
+    }
+    // 引用块里引用用户原话是允许的
+    if (line.trim().startsWith('>')) continue
+    if (version && !isOld(version)) relevant.push(line)
+  }
+  const body = relevant.join('\n')
+  assert.ok(body.length > 0, '没取到 0.25.0 起的内容 —— 解析可能出错')
+
+  const banned = ['我的判断', '我一开始', '我一直在', '我感到', '说实话', '扎心']
+  const hit = banned.filter((w) => body.includes(w))
+  assert.deepEqual(hit, [], `条目里出现叙事化措辞：${hit.join('、')}（应改为事实陈述）`)
 })

@@ -81,8 +81,15 @@ $exists = git tag -l $tag
 if ($exists) {
   Write-Host "  ! 标签 $tag 已存在，跳过" -ForegroundColor Yellow
 } elseif ($DryRun) {
-  Write-Host "  (DryRun) 将执行：git tag $tag && git push origin $tag" -ForegroundColor Yellow
+  Write-Host "  (DryRun) 将执行：git push origin main && git tag $tag && git push origin $tag" -ForegroundColor Yellow
 } else {
+  # ⚠️ 先推**主分支**，再推标签。
+  #    第一版只推标签 —— 标签指向的提交在远端 main 上还不存在，
+  #    仓库首页的分支内容与标签不一致。本次真实发版时发现的。
+  git push origin main
+  if ($LASTEXITCODE -ne 0) { Fail "推送 main 失败" }
+  Ok "已推送 main"
+
   git tag -a $tag -m "release $version"
   if ($LASTEXITCODE -ne 0) { Fail "打标签失败" }
   Ok "已创建标签 $tag"
