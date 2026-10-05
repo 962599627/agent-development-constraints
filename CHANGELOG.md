@@ -8,6 +8,47 @@
 
 ---
 
+## [0.26.5] - 2026-10-05
+
+### hooks 命令是「假安装」：装了钩子却不装检查脚本
+
+**原因**：`bin/cli.js` 的 `installHooks()` 只复制 `.githooks/` 并设置
+`core.hooksPath`，未复制 `sanitize-check.ps1` / `.sh` 与 `.sanitize-deny.txt`；
+而 `pre-commit` 找不到检查脚本时打印提示后 **exit 0**（放行）。
+
+**问题**：在 python2 博客项目上实测 —— `hooks` 报告"✓ git hooks 已启用"，
+但每次提交只打印「⚠️ 找不到脱敏检查脚本，跳过」，**一条规则都没执行**。
+提交里的凭据不会被拦，而用户以为自动化已生效。
+
+**解决方法**：
+- `installHooks()` 一并安装 `scripts/sanitize-check.ps1`、
+  `scripts/sanitize-check.sh`、`.sanitize-deny.txt`；
+  已存在的一律不覆盖（保留用户按自己项目改过的黑名单）
+- 新增测试：断言这 4 个文件必须就位，且钩子里含 `-ExecutionPolicy Bypass`
+
+### 钩子在非 C: 盘上每次提交都被拒
+
+**原因**：`pre-commit` 调用 PowerShell 时未指定执行策略。实测同一份未签名脚本
+在 C: 盘可运行，在 F: 盘被按"来源不可信"拦下（实际生效策略为 RemoteSigned）。
+
+**问题**：脚本被拦 → 退出码 1 → 钩子判定"检查不通过" → **每次提交都被拒绝**，
+且报错内容是执行策略而非命中的规则，很难定位。
+
+**解决方法**：两处调用加 `-ExecutionPolicy Bypass`（开发钩子的标准做法）。
+
+### 检查脚本读不了文件即崩溃
+
+**原因**：`scripts/sanitize-check.ps1` 用 `[System.IO.File]::ReadAllLines` 直读，
+没有异常处理。
+
+**问题**：`-All` 模式扫到 PyInstaller 的 `_MEI` 临时目录（文件被占用）时抛
+`Access to the path ... is denied`，整次检查以异常结束 ——
+一个与检查无关的文件就能让检查没有结论。
+
+**解决方法**：读取包在 try/catch 中，读不了就跳过并打印提示。
+
+---
+
 ## [0.26.4] - 2026-10-05
 
 ### 发版脚本被 PowerShell 的 stderr 误判中断

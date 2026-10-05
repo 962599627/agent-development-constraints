@@ -9,6 +9,12 @@
 # 绕过：git commit --no-verify
 #   ⚠️ 只在你确认没有敏感内容、且清楚原因时使用。
 
+# ⚠️ 为什么要 -ExecutionPolicy Bypass：
+#   实测（2026-10-05）：实际生效策略是 RemoteSigned，
+#   同一份未签名 ps1 在 C: 盘上能跑，在 F: 盘上会被按"来源不可信"拦下；
+#   一旦被拦，rc=1 -> **每次提交都被拒**，而报错信息是执行策略而非命中的规则，
+#   很难看出原因。显式 Bypass 是开发钩子的标准做法。
+#
 # 只检查本次**暂存**的文件 —— 保持提交速度
 files=$(git diff --cached --name-only --diff-filter=ACM)
 [ -z "$files" ] && exit 0
@@ -38,9 +44,9 @@ case "$checker" in
         rc=0
         for f in $files; do
             if command -v pwsh >/dev/null 2>&1; then
-                pwsh -NoProfile -File "$checker" -Path "$f" || rc=1
+                pwsh -NoProfile -ExecutionPolicy Bypass -File "$checker" -Path "$f" || rc=1
             elif command -v powershell >/dev/null 2>&1; then
-                powershell -NoProfile -File "$checker" -Path "$f" || rc=1
+                powershell -NoProfile -ExecutionPolicy Bypass -File "$checker" -Path "$f" || rc=1
             fi
         done
         exit $rc

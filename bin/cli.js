@@ -103,6 +103,46 @@ function installHooks() {
     fs.copyFileSync(path.join(src, f), path.join(dst, f));
   }
 
+  // ------------------------------------------------------------------
+  // ⚠️ 还必须把**检查脚本与黑名单**一起装上。
+  //
+  // 实测踩到的假安装（2026-10-05，在 python2 博客项目上）：
+  //   `hooks` 只装了 .githooks/pre-commit 并设了 core.hooksPath，
+  //   而 pre-commit 找不到 sanitize-check.ps1 时会打印
+  //   「⚠️ 找不到脱敏检查脚本，跳过」然后 **exit 0** ——
+  //   于是每次提交都"看起来检查了"，实际什么都没查：
+  //   自动化装了等于没装。
+  //
+  // 检查脚本要读 <root>/.sanitize-deny.txt（$root = 脚本所在目录的上级），
+  // 所以脚本放 <target>/scripts/、黑名单放 <target>/ 下，两者配套。
+  //
+  // 已存在的一律**不覆盖** —— 用户可能已经按自己项目改过黑名单。
+  // ------------------------------------------------------------------
+  const scriptsDir = path.join(target, 'scripts');
+  fs.mkdirSync(scriptsDir, { recursive: true });
+  const wanted = [
+    ['.sanitize-deny.txt', path.join(target, '.sanitize-deny.txt')],
+    ['scripts/sanitize-check.ps1', path.join(scriptsDir, 'sanitize-check.ps1')],
+    ['scripts/sanitize-check.sh', path.join(scriptsDir, 'sanitize-check.sh')],
+  ];
+  const installed = [];
+  const skipped = [];
+  for (const [rel, dest] of wanted) {
+    const from = path.join(ROOT, rel.split('/').join(path.sep));
+    if (!fs.existsSync(from)) continue;
+    if (fs.existsSync(dest)) {
+      skipped.push(rel);
+      continue;
+    }
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(from, dest);
+    installed.push(rel);
+  }
+  if (installed.length === 0 && skipped.length === 0) {
+    log('错误：包内找不到脱敏检查脚本（sanitize-check.ps1 / .sh）');
+    return 1;
+  }
+
   const r = spawnSync('git', ['config', 'core.hooksPath', '.githooks'], {
     cwd: target,
     stdio: 'inherit',
@@ -114,6 +154,8 @@ function installHooks() {
 
   log('');
   log('✓ git hooks 已启用（core.hooksPath = .githooks）');
+  if (installed.length) log(`✓ 脱敏检查已装：${installed.join('、')}`);
+  if (skipped.length) log(`· 已存在、未覆盖（保留你的改动）：${skipped.join('、')}`);
   log('');
   log('  现在每次 git commit 都会先跑脱敏检查，不通过会拒绝提交。');
   log('  绕过：git commit --no-verify（请说明理由）');

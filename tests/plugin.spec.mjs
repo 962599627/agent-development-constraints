@@ -864,3 +864,30 @@ test('【变更日志】条目里不许出现叙事化措辞', () => {
   const hit = banned.filter((w) => body.includes(w))
   assert.deepEqual(hit, [], `条目里出现叙事化措辞：${hit.join('、')}（应改为事实陈述）`)
 })
+
+
+test('【发布】hooks 命令必须把脱敏检查脚本一起装上（否则是假安装）', async () => {
+  // 实测踩到（2026-10-05，python2 博客项目）：
+  //   hooks 只装了 .githooks/pre-commit + core.hooksPath，
+  //   而 pre-commit 找不到 sanitize-check.ps1 时打印
+  //   「⚠️ 找不到脱敏检查脚本，跳过」然后 exit 0 —— 每次提交都"看起来检查了"。
+  const { execFileSync } = await import('node:child_process')
+  const project = mkdtempSync(join(process.env.TEMP || '/tmp', 'adc-hooks-'))
+  try {
+    execFileSync('git', ['init', '-q'], { cwd: project })
+    execFileSync('node', [join(ROOT, 'bin', 'cli.js'), 'hooks', project], { cwd: project })
+
+    for (const rel of ['.githooks/pre-commit', 'scripts/sanitize-check.ps1',
+                       'scripts/sanitize-check.sh', '.sanitize-deny.txt']) {
+      assert.ok(
+        existsSync(join(project, rel)),
+        `hooks 少装了 ${rel} —— pre-commit 会静默跳过，自动化等于没装`
+      )
+    }
+    // 钩子里必须带 -ExecutionPolicy Bypass（否则在非 C: 盘/严格策略下每次提交都被拒）
+    const hook = readFileSync(join(project, '.githooks', 'pre-commit'), 'utf8')
+    assert.match(hook, /-ExecutionPolicy Bypass/, 'pre-commit 缺少 -ExecutionPolicy Bypass')
+  } finally {
+    rmSync(project, { recursive: true, force: true })
+  }
+})

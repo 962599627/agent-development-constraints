@@ -99,7 +99,17 @@ foreach ($f in $files) {
     $rel = $f.Replace($root + '\', '').Replace('\', '/')
     $checked++
 
-    $lines = [System.IO.File]::ReadAllLines($f, [System.Text.Encoding]::UTF8)
+    # ⚠️ 读不了的文件要**跳过**，不能让它把整次检查弄崩。
+    #    实测（2026-10-05）：-All 模式撞上 PyInstaller 的 _MEI 临时目录，
+    #    报 "Access to the path ... is denied"，整次检查以异常结束 ——
+    #    而那个文件根本不在检查范围内，不该影响结论。
+    try {
+        $lines = [System.IO.File]::ReadAllLines($f, [System.Text.Encoding]::UTF8)
+    }
+    catch {
+        Write-Host ("  ⚠️  跳过（读不了）: " + $rel) -ForegroundColor DarkYellow
+        continue
+    }
     for ($i = 0; $i -lt $lines.Count; $i++) {
         $text = $lines[$i]
 
