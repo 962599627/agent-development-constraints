@@ -203,18 +203,39 @@ function notInstalledMessage(cwd) {
   )
 }
 
-/** 生成每步注入的简短提醒 —— 只放标题，不放大段正文 */
+/**
+ * 已注入过的 agent。
+ *
+ * ⚠️ **这是本插件最重要的成本控制**。
+ *
+ * 注入的消息会**进入 session 历史**，之后每一轮请求都要重新发送它。
+ * 如果每个 step 都注入一次，成本就随步数**线性增长**：
+ *   一个 turn 有 5 步 → 5 条注入 → 之后每轮重发这 5 条。
+ *
+ * 所以：**每个 agent（会话）只注入一次**。
+ * 用 WeakSet 而不是 Set —— 不阻止 agent 被回收，也不会无限增长。
+ */
+const injectedAgents = new WeakSet()
+
+/**
+ * 生成注入的提醒 —— **一句话，只为把 AI 引到工具上**。
+ *
+ * ## 为什么刻意不列 L0 条目
+ *
+ * 早先的实现会列全部 12 条铁律标题（约 280 tokens）。看起来很"贴心"，
+ * 实际是把成本埋进了历史里：
+ *   - 一条 280 tokens 的消息进历史 → 之后**每一轮**都要重发
+ *   - 若每步注入，还要乘以步数
+ *
+ * 而 `constraints` 工具**随时可调用**，`l0` 按需取即可。
+ * 两者的信息完全等价，但按需取是**零常驻成本**。
+ *
+ * 现在这句话约 35 tokens，且每个会话只发一次。
+ */
 function buildBrief(cwd) {
   const found = loadConstraints(cwd)
   if (!found) return null
-  const iron = extractIronRules(found.text)
-  const lines = ['【开发约束 · 来自 agent-constraints】', `规则库：${found.path}`]
-  if (iron.length) {
-    lines.push('L0 铁律（动手前逐条对照）：')
-    for (const r of iron) lines.push(`  - ${r}`)
-  }
-  lines.push('需要完整规则、触发条件与检查方法时，调用 constraints 工具。')
-  return lines.join('\n')
+  return '【开发约束】本项目装有 agent-constraints 规则库。动手前请先调用 constraints 工具查阅 L0 铁律。'
 }
 
 /**
@@ -227,18 +248,19 @@ function buildBrief(cwd) {
 function buildConstraintsTool() {
   return {
     name: 'constraints',
+    // ⚠️ description 会**随每个请求**发给模型（工具 schema），是常驻成本。
+    // 所以写得尽量短，只保留"什么时候该用"和动作清单。
     description:
       '查看本项目的开发约束规则库（agent-constraints）。' +
-      'action=show 返回完整规则库正文；action=l0 只返回 L0 铁律；' +
-      'action=path 返回规则库文件路径；action=where 返回解析诊断（用哪个目录找到的）。' +
-      '当你不确定本项目有哪些约定、或准备改动结构/配置时，先调用它。',
+      'action: show=全部规则 / l0=仅铁律 / path=规则库位置 / where=解析诊断。' +
+      '动手前、或不确定本项目有哪些约定时先调用。',
     parameters: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
           enum: ['show', 'l0', 'path', 'where'],
-          description: 'show=全部规则；l0=仅铁律；path=规则库位置；where=解析诊断。',
+          description: 'show|l0|path|where',
         },
       },
       required: ['action'],
@@ -418,11 +440,27 @@ export function apply(ctx) {
           // 上次崩很可能就是因为我凭文档猜了一个不完整的 message 对象。
           const first =
             decision && Array.isArray(decision.messages) ? decision.messages[0] : null
-          // 记下会话 cwd，状态路由要用（路由里没有 agent）
+          // 记下会话 cwd，状态路由要用（HTTP handler 里没有 agent）。
+          // 同时记下探测过程 —— 工具那边用 exec.agent.session.header.cwd 有效，
+          // 但事件这边 payload.agent 的结构可能不同（实测确实拿不到）。
           try {
             const c = getCwd(payload && payload.agent)
-            if (c) lastObservedCwd = c
-          } catch {}
+            if (c && !lastObservedCwd) lastObservedCwd = c
+            const pa = payload && payload.agent
+            const psess = pa && pa.session
+            writeProbe('cwd-probe', {
+              got: c || null,
+              agentKeys: pa ? Object.keys(pa) : null,
+              agentType: pa ? typeof pa : null,
+              hasSession: Boolean(psess),
+              sessionKeys: psess ? Object.keys(psess) : null,
+              hasHeader: Boolean(psess && psess.header),
+              headerKeys: psess && psess.header ? Object.keys(psess.header) : null,
+              headerCwd: psess && psess.header ? psess.header.cwd || null : null,
+            })
+          } catch (e) {
+            writeProbe('cwd-probe-failed', { error: e && e.message })
+          }
           writeProbe('pre-step-observed', {
             decisionType: typeof decision,
             decisionIsUndefined: decision === undefined,
