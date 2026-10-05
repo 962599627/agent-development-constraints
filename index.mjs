@@ -36,10 +36,11 @@
  *   - 不写任何东西：本文件没有任何 fs 写操作
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { existsSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs'
+import { basename, dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { zstdDecompressSync as zlibZstdDecompress } from 'node:zlib'
 
 export const name = 'agent-development-constraints'
 
@@ -418,37 +419,207 @@ function analyzeSession(exec) {
 }
 
 /**
+ * 解压 DSH 的会话文件。
+ *
+ * ## ⚠️ 为什么不能用 `zstdDecompressSync(buf)` 一次搞定
+ *
+ * 会话文件是**流式追加**的，所以里面是**多个 zstd frame 串接**
+ * —— 实测一个 648 KB 的文件里有 20+ 个 frame，起点在 0, 212, 537, 1879, ...
+ * 而 `zstdDecompressSync` **只解第一个 frame**。后果很有迷惑性：
+ * 一个 1.5 MB 的会话只解出**一行会话头**，看起来像"这个会话没有任何工具调用"，
+ * **实际是解压不完整** —— 一个会直接导致错误结论的静默失败。
+ *
+ * 正确做法：扫描 zstd magic number（28 B5 2F FD）找出所有 frame 起点，
+ * 逐段解压再拼接。坏 frame 只计数不抛错：一帧坏掉不该毁掉整个统计。
+ */
+function decompressSessionFile(filePath) {
+  let buf
+  try {
+    buf = readFileSync(filePath)
+  } catch {
+    return { text: '', frames: 0, failed: 0 }
+  }
+
+  const magic = Buffer.from([0x28, 0xb5, 0x2f, 0xfd])
+  const starts = []
+  let i = 0
+  while (i < buf.length) {
+    const k = buf.indexOf(magic, i)
+    if (k < 0) break
+    starts.push(k)
+    i = k + 4
+  }
+
+  if (!starts.length) {
+    try {
+      return { text: zlibZstdDecompress(buf).toString('utf8'), frames: 1, failed: 0 }
+    } catch {
+      return { text: '', frames: 0, failed: 1 }
+    }
+  }
+
+  const parts = []
+  let failed = 0
+  for (let n = 0; n < starts.length; n++) {
+    const start = starts[n]
+    const end = n + 1 < starts.length ? starts[n + 1] : buf.length
+    try {
+      parts.push(zlibZstdDecompress(buf.subarray(start, end)))
+    } catch {
+      failed++
+    }
+  }
+  return { text: Buffer.concat(parts).toString('utf8'), frames: starts.length, failed }
+}
+
+/** 找出所有会话文件，按修改时间从新到旧 */
+function listSessionFiles() {
+  const root = join(homedir(), '.dsh', 'sessions')
+  const out = []
+  const walk = (dir, depth) => {
+    if (depth > 3) return
+    let ents
+    try {
+      ents = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const e of ents) {
+      const p = join(dir, e.name)
+      if (e.isDirectory()) {
+        walk(p, depth + 1)
+      } else if (e.name === 'session.v4.jsonl.zstd') {
+        try {
+          const st = statSync(p)
+          out.push({ path: p, size: st.size, mtimeMs: st.mtimeMs })
+        } catch {
+          // 读不到的跳过
+        }
+      }
+    }
+  }
+  walk(root, 0)
+  return out.sort((a, b) => b.mtimeMs - a.mtimeMs)
+}
+
+/**
+ * **跨会话**统计工具调用次数 —— 这是修 `disable` 判据的核心。
+ *
+ * ## 为什么必须跨会话
+ *
+ * 只看当前会话，会把"我这个会话恰好没调 SSH"判成"你不需要 SSH"，
+ * 于是建议你关掉真正在用的东西。**那是用样本代替总体。**
+ *
+ * 实测差异（2026-10-05）：某批工具在**当前会话 0 次**，
+ * 但**跨会话被调用了 20+ 次** —— 只看当前会话就会误报它们"没用过"。
+ *
+ * ⚠️ 代价：要解压并解析历史会话文件，实测 5 个会话约 450 ms。
+ * 所以调用方**应当缓存**结果，不要每次请求都跑。
+ *
+ * @param maxSessions 最多看几个会话（默认 8）
+ * @param maxAgeDays  只看最近几天内的（默认 14）
+ */
+function analyzeRecentSessions(maxSessions = 8, maxAgeDays = 14) {
+  const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000
+  const all = listSessionFiles()
+  // 太小的文件只有会话头，没有内容可统计
+  const files = all.filter((f) => f.size > 50 * 1024 && f.mtimeMs >= cutoff).slice(0, maxSessions)
+
+  const merged = {}
+  let toolCalls = 0
+  let frames = 0
+  let frameFailures = 0
+  const scanned = []
+
+  for (const f of files) {
+    const res = decompressSessionFile(f.path)
+    frames += res.frames
+    frameFailures += res.failed
+    let lines = 0
+    for (const line of res.text.split('\n')) {
+      if (!line.trim()) continue
+      lines++
+      try {
+        const ev = JSON.parse(line)
+        if (ev.type === 'tool/call' && ev.data && ev.data.name) {
+          merged[ev.data.name] = (merged[ev.data.name] || 0) + 1
+          toolCalls++
+        }
+      } catch {
+        // 单行解析失败不影响整体
+      }
+    }
+    scanned.push({ session: basename(dirname(f.path)), lines, frames: res.frames })
+  }
+
+  const ranking = Object.keys(merged)
+    .map((name) => ({ name, calls: merged[name] }))
+    .sort((a, b) => b.calls - a.calls)
+
+  return {
+    sessionsScanned: files.length,
+    totalSessions: all.length,
+    maxAgeDays,
+    toolCalls,
+    distinctToolsUsed: ranking.length,
+    frames,
+    frameFailures,
+    ranking,
+    scanned,
+  }
+}
+
+/**
  * 综合"占用"与"使用"，给出**建议关闭清单**。
  *
  * 判断依据（两条都要满足）：
  *   1. 这个工具的 schema 明显占地方（默认 >= 200 tokens）
- *   2. 它在本会话里**一次都没被调用过**
+ *   2. 它**跨会话**一次都没被调用过（读不到历史时降级为当前会话，并明确标注）
  *
  * 满足两条的才是明确候选 —— **占了地方却什么都没干**的工具。
- * 只看大小会误伤"体积大但天天用"的（比如 read / bash）。
+ * 只看大小会误伤"体积大但天天用"的（比如 read / pwsh）。
  */
 function suggestDisable(exec, minTokens = 200) {
   const audit = auditToolSchemas(exec)
   if (audit.error) return { error: audit.error }
 
-  const sess = analyzeSession(exec)
-  if (sess.error) {
-    return {
-      说明: '能算出占用，但读不到本会话的工具调用记录，无法判断"用过没有"',
-      原因: sess.error,
-      改进: '换成读占用排名的裸数据：cost(action="audit")',
+  // ⚠️ 判据用**跨会话**而不是当前会话。
+  // 只看当前会话会把"本期没用"误判成"永远不需要"——
+  // 实测就有工具在当前会话 0 次、但跨会话被调用了 20+ 次。
+  // 历史读不到时才降级为当前会话，并且**明确标注**降级了。
+  const history = analyzeRecentSessions()
+  let used = {}
+  let basis = ''
+  let detail = null
+
+  if (history.distinctToolsUsed > 0) {
+    for (const r of history.ranking) used[r.name] = r.calls
+    basis = '跨会话（最近 ' + history.sessionsScanned + ' 个会话 / ' + history.maxAgeDays + ' 天内）'
+    detail = {
+      扫描: history.sessionsScanned + ' / ' + history.totalSessions + ' 个会话',
+      解析出的工具调用: history.toolCalls,
+      用过的不同工具: history.distinctToolsUsed,
+      zstd帧: history.frames + (history.frameFailures ? '（' + history.frameFailures + ' 帧解压失败）' : ''),
     }
+  } else {
+    const sess = analyzeSession(exec)
+    if (sess.error) {
+      return {
+        说明: '既读不到历史会话，也读不到当前会话，无法判断"用过没有"',
+        原因: sess.error,
+        改进: '先用 cost(action="audit") 只看占用排名',
+      }
+    }
+    for (const r of sess.工具调用.排名) used[r.name] = r.calls
+    basis = '仅当前会话（读不到历史会话文件，判据已降级）'
+    detail = { 本会话事件数: sess.eventCount, 工具调用: sess.工具调用.总计 }
   }
 
-  const used = {}
-  for (const row of sess.工具调用.排名) used[row.name] = row.calls
-
   const candidates = []
-  for (const row of audit.all) {
+  for (const row of audit.all || []) {
     if (row.approxTokens < minTokens) continue
-    if ((used[row.name] || 0) === 0) {
-      candidates.push({ name: row.name, approxTokens: row.approxTokens })
-    }
+    if ((used[row.name] || 0) > 0) continue
+    candidates.push({ name: row.name, approxTokens: row.approxTokens })
   }
   const saved = candidates.reduce((n, c) => n + c.approxTokens, 0)
 
@@ -459,27 +630,27 @@ function suggestDisable(exec, minTokens = 200) {
     groups[prefix] = (groups[prefix] || 0) + c.approxTokens
   }
   const groupRows = Object.keys(groups)
-    .map((k) => ({ 前缀: k, 可省tokens: groups[k], 个数: candidates.filter((c) => (c.name.split('_')[0] || c.name) === k).length }))
+    .map((k) => ({
+      前缀: k,
+      可省tokens: groups[k],
+      个数: candidates.filter((c) => (c.name.split('_')[0] || c.name) === k).length,
+    }))
     .sort((a, b) => b.可省tokens - a.可省tokens)
 
   return {
-    本会话规模: {
-      事件数: sess.eventCount,
-      轮次: sess.事件构成.turn,
-      工具调用: sess.工具调用.总计,
-      用过的不同工具: sess.工具调用.不同工具数,
-    },
+    判据: basis,
+    依据详情: detail,
     上下文总量: audit.totalApproxTokens + ' tokens/请求（' + audit.count + ' 个工具）',
     建议关闭: candidates,
     合计可省: saved + ' tokens/请求',
     按前缀归组: groupRows,
-    判定标准: '占用 >= ' + minTokens + ' tokens 且本会话调用次数为 0',
+    判定标准: '占用 >= ' + minTokens + ' tokens 且**跨会话**调用次数为 0',
     怎么关:
       '在 设置 → 插件市场（或内置插件）里禁用提供它的插件；' +
       '也可以从 profile 的 dsh.profile.bundles 里去掉对应包名。',
     注意:
-      '本会话没调用过 ≠ 永远不需要。如果某个工具你只是这个会话没用，' +
-      '先对照它的用途再决定；关掉后随时可以再开。',
+      '跨会话没用过 ≠ 永远不需要。建议前先对照它的用途；关掉后随时可以再开。' +
+      '（提示：本判据看的是历史会话文件，若你换了工作目录，旧会话可能不在统计范围内。）',
   }
 }
 
@@ -990,10 +1161,23 @@ export function apply(ctx) {
               try {
                 const audit = auditToolSchemas({ agent: pa })
                 if (audit && !audit.error) {
-                  const sess = analyzeSession({ agent: pa })
+                  // ⚠️ 用**跨会话**使用数据，和 suggestDisable 保持同一判据。
+                  // 否则卡片会把"本期没用过"的工具标红，而 cost(action="disable")
+                  // 却因为历史里用过而不列它 —— 同一个插件给出两个矛盾结论。
+                  // （代价：约 450 ms，但只在 pre-step 首次跑一次。）
+                  const history = analyzeRecentSessions()
                   const used = {}
-                  if (sess && sess.工具调用) {
-                    for (const row of sess.工具调用.排名) used[row.name] = row.calls
+                  let usedBasis = ''
+                  if (history.distinctToolsUsed > 0) {
+                    for (const r of history.ranking) used[r.name] = r.calls
+                    usedBasis = '跨会话 ' + history.sessionsScanned + ' 个会话'
+                  } else {
+                    // 历史读不到 → 降级为当前会话，并标注
+                    const sess = analyzeSession({ agent: pa })
+                    if (sess && sess.工具调用) {
+                      for (const row of sess.工具调用.排名) used[row.name] = row.calls
+                    }
+                    usedBasis = '仅当前会话（历史不可读）'
                   }
 
                   // 完整的逐工具明细 —— 卡片要拿它画条形图。
@@ -1004,7 +1188,6 @@ export function apply(ctx) {
                     tokens: r.approxTokens,
                     calls: used[r.name] || 0,
                   }))
-                  // 按占用降序（audit.all 已排好，这里再保险一次）
                   rows.sort((a, b) => b.tokens - a.tokens)
 
                   let savable = 0
@@ -1022,8 +1205,8 @@ export function apply(ctx) {
                     savableApproxTokens: savable,
                     candidates: candidates.slice(0, 8),
                     candidateCount: candidates.length,
-                    sessionToolsUsed:
-                      sess && sess.工具调用 ? sess.工具调用.不同工具数 : null,
+                    sessionToolsUsed: history.distinctToolsUsed || null,
+                    usedBasis,
                     // 前 15 个逐条明细，供卡片画条形图
                     top: rows.slice(0, 15),
                   }

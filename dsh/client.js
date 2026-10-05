@@ -314,7 +314,7 @@ window.__ModuleLoader__.load({
                 audit.totalApproxTokens + ' tokens/请求（' + audit.toolCount + ' 个工具）'
               ),
               row(
-                '本会话用过',
+                '用过（' + (audit.usedBasis || '本会话') + '）',
                 (audit.sessionToolsUsed != null ? audit.sessionToolsUsed : '?') + ' 个工具'
               ),
               row('可省', audit.savableApproxTokens + ' tokens/请求（' + pct + '%）'),
