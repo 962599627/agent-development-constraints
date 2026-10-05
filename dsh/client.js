@@ -124,21 +124,54 @@ window.__ModuleLoader__.load({
         var busyState = react.useState(false)
         var busy = busyState[0]
         var setBusy = busyState[1]
+        // 用于强制重新拉取（刷新按钮 / 自动重试）
+        var tickState = react.useState(0)
+        var tick = tickState[0]
+        var setTick = tickState[1]
 
-        react.useEffect(function () {
-          var alive = true
-          fetchStatus()
-            .then(function (s) {
-              if (!alive) return
-              setStatus(s)
-            })
-            .catch(function (e) {
-              if (alive) setErr(String((e && e.message) || e))
-            })
-          return function () {
-            alive = false
-          }
-        }, [])
+        /**
+         * 拉状态，并在**数据还不完整时自动重试**。
+         *
+         * ⚠️ 为什么必须有这个：`contextAudit` 由 host 在第一个
+         * `agent/pre-step` 时才具备 —— 如果用户打开设置页的时机早于
+         * 那条消息，卡片拿到的就是 null 快照，而卡片只在挂载时请求一次，
+         * **永远不会自己变好**。实测就是这样：host 数据早已正确，
+         * 卡片却一直空着，重启也没用。
+         *
+         * 重试策略：前 10 次每 1.5 秒一次（覆盖"发消息前后"那几秒），
+         * 拿到就停；之后不再打扰 —— 用户还可以用「刷新」按钮手动重取。
+         */
+        react.useEffect(
+          function () {
+            var alive = true
+            var tries = 0
+
+            function load() {
+              fetchStatus()
+                .then(function (s) {
+                  if (!alive) return
+                  setStatus(s)
+                  // 数据齐全（或取不到状态）就停
+                  var complete = s && s.contextAudit && s.cwdSource === 'session'
+                  if (!complete && tries < 10) {
+                    tries++
+                    timer = setTimeout(load, 1500)
+                  }
+                })
+                .catch(function (e) {
+                  if (alive) setErr(String((e && e.message) || e))
+                })
+            }
+
+            var timer = null
+            load()
+            return function () {
+              alive = false
+              if (timer) clearTimeout(timer)
+            }
+          },
+          [tick]
+        )
 
         /** 切换注入开关；写成功后本地立即反映，不等重新拉取 */
         function toggleInject(next) {
@@ -218,8 +251,47 @@ window.__ModuleLoader__.load({
         children.push(
           h(
             'div',
-            { key: 'hint', style: { color: palette.dim, fontSize: '11.5px', marginTop: '4px' } },
-            '每个会话只提醒一次，约 41 tokens。关闭后只保留 constraints 工具（按需调用，零常驻成本）。'
+            {
+              key: 'hint',
+              style: {
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '10px',
+                color: palette.dim,
+                fontSize: '11.5px',
+                marginTop: '4px',
+              },
+            },
+            h(
+              'span',
+              null,
+              '每个会话只提醒一次，约 41 tokens。关闭后只保留 constraints 工具（按需调用，零常驻成本）。'
+            ),
+            h(
+              'button',
+              {
+                key: 'refresh',
+                type: 'button',
+                onClick: function () {
+                  setErr(null)
+                  setTick(function (n) {
+                    return n + 1
+                  })
+                },
+                style: {
+                  flex: '0 0 auto',
+                  padding: '2px 10px',
+                  fontSize: '11.5px',
+                  color: palette.text,
+                  background: 'transparent',
+                  border: '1px solid ' + palette.border,
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                },
+              },
+              '刷新'
+            )
           )
         )
 
