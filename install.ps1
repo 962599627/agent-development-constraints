@@ -77,6 +77,14 @@ Copy-Item "$src\.sanitize-deny.txt"  "$pkgDir\" -Force
 New-Item -ItemType Directory -Force -Path "$pkgDir\scripts" | Out-Null
 Copy-Item "$src\scripts\*"           "$pkgDir\scripts\" -Force
 
+# CLI 与包元数据 —— 让安装后的项目也能用 `agent-constraints check/hooks/...`
+# （实测踩过：这两样漏拷，装完只剩 scripts/ 下的原始脚本，CLI 命令报模块不存在）
+if (Test-Path "$src\bin") {
+    New-Item -ItemType Directory -Force -Path "$pkgDir\bin" | Out-Null
+    Copy-Item "$src\bin\*" "$pkgDir\bin\" -Force
+}
+if (Test-Path "$src\package.json") { Copy-Item "$src\package.json" "$pkgDir\" -Force }
+
 # ⚠️ git hooks 必须放在**目标项目根**（git 只认仓库根的 .githooks），
 #    放在 agent-constraints/ 下面是不会生效的
 if (Test-Path "$src\.githooks") {

@@ -1,0 +1,9 @@
+fix(install): 漏拷 bin/ 与 package.json —— 装完用不了 CLI
+
+实测发现：npx 安装后只有 26 个文件，缺 bin/cli.js 与 package.json，
+所以安装到项目后 `agent-constraints check/hooks/...` 全部报「模块不存在」，
+只剩 scripts/ 下的原始脚本可用。
+
+修复：install.ps1 / install.sh 补上这两个的拷贝。
+
+验证：重装后 bin/cli.js 与 package.json 都在，`node .../bin/cli.js version` 返回 0.7.0。

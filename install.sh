@@ -67,6 +67,14 @@ cp -f "$SRC/.sanitize-deny.txt" "$PKG/"
 mkdir -p "$PKG/scripts"
 cp -f "$SRC/scripts/"* "$PKG/scripts/"
 
+# CLI 与包元数据 —— 让安装后的项目也能用 agent-constraints check/hooks/...
+# （实测踩过：漏拷这两样，装完只剩 scripts/ 下的原始脚本）
+if [ -d "$SRC/bin" ]; then
+  mkdir -p "$PKG/bin"
+  cp -f "$SRC/bin/"* "$PKG/bin/"
+fi
+[ -f "$SRC/package.json" ] && cp -f "$SRC/package.json" "$PKG/"
+
 # ⚠️ git hooks 必须放在**目标项目根**（git 只认仓库根的 .githooks）
 if [ -d "$SRC/.githooks" ]; then
   mkdir -p "$TARGET_ROOT/.githooks"
