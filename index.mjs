@@ -231,8 +231,32 @@ function buildConstraintsTool() {
 }
 
 export function apply(ctx) {
-  // ---------- ② 注册 constraints 工具 ----------
-  // 放在前面：即使事件监听那条路出问题，工具也已经可用。
+  // ---------- 注册 constraints 工具 ----------
+  //
+  // ⚠️ 目前**只做这一件事**，不监听任何事件。
+  //
+  // ## 为什么把 `agent/pre-step` 摘掉了（第二次事故的根因）
+  //
+  // 上一版监听 pre-step 并「原样透传」`next()` 的结果：
+  //
+  //   const decision = await next()
+  //   if (!decision || decision.kind !== 'enter') return decision   // ← 返回 undefined
+  //
+  // 我假定了 `next()` 一定返回 `PreStepDecision` 对象。但**宿主读的正是
+  // `decision.kind`** —— 一旦 `next()` 给的是 `undefined`，我"原样透传"出去的
+  // 就是 `undefined`，宿主读 `.kind` 直接崩：
+  //
+  //   Cannot read properties of undefined (reading 'kind')
+  //
+  // **"原样透传"听起来最保守，实际是把上游的空值往下游传了。**
+  // 在这个契约里，返回 `undefined` 本身就是非法的 —— 必须回一个合法的
+  // `{ kind: 'enter', messages }` 或 `{ kind: 'reject' }`。
+  //
+  // 这也是为什么第一轮"零外部依赖"的修复没有效果：崩的不是加载，
+  // 而是每一个步骤的 pre-step。
+  //
+  // 在拿到真实契约（或确认 `next()` 的返回形状）之前，这里选择**什么都不做**：
+  // 少一个功能，换宿主绝对不崩。见 L1 的 C-009。
   try {
     if (ctx && ctx.tools && typeof ctx.tools.register === 'function') {
       ctx.tools.register(buildConstraintsTool())
@@ -241,54 +265,6 @@ export function apply(ctx) {
     // 注册失败只让工具不可用，绝不影响会话
     try {
       console.warn('[agent-constraints] 工具注册失败（插件降级，会话不受影响）:', err && err.message)
-    } catch {}
-  }
-
-  // ---------- ① 每步之前并入一条提醒 ----------
-  //
-  // `agent/pre-step` 是 waterfall：
-  //   'agent/pre-step'(payload: { agent, messages: UserMessage[], turn, step, signal },
-  //                   next: () => Promise<PreStepDecision>): Promise<PreStepDecision>
-  //   type PreStepDecision = { kind: 'reject' } | { kind: 'enter'; messages: UserMessage[] }
-  //
-  // 保守策略：先拿下游结果，只有确认形状对、且真的拿到 brief 时才改动；
-  // 任何异常 / 任何不确定，都原样把下游结果返回。
-  // 这条路径一旦返回错东西，整个会话就会失败（上一次就是这么崩的）。
-  try {
-    ctx.on('agent/pre-step', async (payload, next) => {
-      let decision
-      try {
-        decision = await next()
-      } catch (err) {
-        // 下游自己抛错就不该由我们吞掉或改写，向上传播
-        throw err
-      }
-      try {
-        // 只有确认是本步正常进入、且消息是数组时才介入
-        if (!decision || decision.kind !== 'enter' || !Array.isArray(decision.messages)) {
-          return decision
-        }
-        const brief = buildBrief(getCwd(payload && payload.agent))
-        if (!brief) return decision
-
-        // 追加在**末尾**：人工输入应当排在最前，插件提示放后面。
-        // 形状必须是 UserMessage（带 role: 'user' 与 content 数组），
-        // 不是 ContentBlock —— 这里搞错过一次。
-        const extra = {
-          role: 'user',
-          content: [{ type: 'text', text: brief }],
-        }
-        return { ...decision, messages: [...decision.messages, extra] }
-      } catch (err) {
-        try {
-          console.warn('[agent-constraints] 注入失败（会话不受影响）:', err && err.message)
-        } catch {}
-        return decision
-      }
-    })
-  } catch (err) {
-    try {
-      console.warn('[agent-constraints] pre-step 监听注册失败（插件降级）:', err && err.message)
     } catch {}
   }
 }
