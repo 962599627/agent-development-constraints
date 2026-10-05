@@ -995,21 +995,37 @@ export function apply(ctx) {
                   if (sess && sess.工具调用) {
                     for (const row of sess.工具调用.排名) used[row.name] = row.calls
                   }
+
+                  // 完整的逐工具明细 —— 卡片要拿它画条形图。
+                  // ⚠️ 这里可以放心给全量：卡片走 HTTP 拿数据，
+                  // **不进 AI 上下文**，所以没有 token 成本。
+                  const rows = (audit.all || []).map((r) => ({
+                    name: r.name,
+                    tokens: r.approxTokens,
+                    calls: used[r.name] || 0,
+                  }))
+                  // 按占用降序（audit.all 已排好，这里再保险一次）
+                  rows.sort((a, b) => b.tokens - a.tokens)
+
                   let savable = 0
                   const candidates = []
-                  for (const row of audit.all || []) {
-                    if (row.approxTokens < 200) continue
-                    if ((used[row.name] || 0) > 0) continue
-                    savable += row.approxTokens
-                    candidates.push(row.name)
+                  for (const r of rows) {
+                    if (r.tokens < 200) continue
+                    if (r.calls > 0) continue
+                    savable += r.tokens
+                    candidates.push(r.name)
                   }
+
                   lastAuditCache = {
                     toolCount: audit.count,
                     totalApproxTokens: audit.totalApproxTokens,
                     savableApproxTokens: savable,
                     candidates: candidates.slice(0, 8),
                     candidateCount: candidates.length,
-                    sessionToolsUsed: sess && sess.工具调用 ? sess.工具调用.不同工具数 : null,
+                    sessionToolsUsed:
+                      sess && sess.工具调用 ? sess.工具调用.不同工具数 : null,
+                    // 前 15 个逐条明细，供卡片画条形图
+                    top: rows.slice(0, 15),
                   }
                 }
               } catch {

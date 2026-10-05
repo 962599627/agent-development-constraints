@@ -296,7 +296,6 @@ window.__ModuleLoader__.load({
             audit.totalApproxTokens > 0
               ? Math.round((audit.savableApproxTokens / audit.totalApproxTokens) * 100)
               : 0
-          var names = audit.candidates || []
           children.push(
             h(
               'div',
@@ -322,22 +321,111 @@ window.__ModuleLoader__.load({
               audit.candidateCount > 0
                 ? row(
                     '建议关闭',
-                    audit.candidateCount +
-                      ' 个：' +
-                      names.slice(0, 4).join('、') +
-                      (audit.candidateCount > 4 ? ' 等' : '')
+                    audit.candidateCount + ' 个（下图红色条）'
                   )
-                : row('建议关闭', '无（本会话用过的工具都值得留）'),
+                : row('建议关闭', '无（本会话用过的工具都值得留）')
+            )
+          )
+
+          // ---------- 占用排行（条形图）----------
+          // 数据走 HTTP，不进 AI 上下文，所以可以给全量明细。
+          var rows2 = audit.top || []
+          var maxTokens = rows2.length ? rows2[0].tokens || 1 : 1
+          if (rows2.length) {
+            var BAR_USED = 'var(--dsw-alias-state-business-primary, #4a9eff)'
+            var BAR_IDLE = 'var(--dsw-alias-label-danger, #e5534b)'
+
+            children.push(
               h(
                 'div',
                 {
-                  key: 'hint',
-                  style: { color: palette.dim, fontSize: '11.5px', marginTop: '6px' },
+                  key: 'bars',
+                  style: {
+                    marginTop: '8px',
+                    padding: '10px 12px',
+                    border: '1px solid ' + palette.border,
+                    borderRadius: '10px',
+                    background: palette.bg,
+                  },
                 },
-                '完整清单与关闭方式：让 AI 调用 cost(action="disable")'
+                h(
+                  'div',
+                  {
+                    key: 'barTitle',
+                    style: { fontSize: '12px', color: palette.text, marginBottom: '6px' },
+                  },
+                  '工具 schema 占用排行（前 ' + rows2.length + ' 个）'
+                ),
+                rows2.map(function (r, i) {
+                  var w = Math.max(2, Math.round((r.tokens / maxTokens) * 100))
+                  // 与 suggestDisable 同一判据：占地方 >= 200 且本会话 0 次调用
+                  var idle = r.tokens >= 200 && r.calls === 0
+                  return h(
+                    'div',
+                    { key: 'bar' + i, style: { marginTop: i === 0 ? '0' : '5px' } },
+                    h(
+                      'div',
+                      {
+                        style: {
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          gap: '8px',
+                          fontSize: '11.5px',
+                          color: palette.dim,
+                        },
+                      },
+                      h(
+                        'span',
+                        {
+                          style: {
+                            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          },
+                        },
+                        r.name
+                      ),
+                      h(
+                        'span',
+                        { style: { flex: 'none' } },
+                        r.tokens + ' tokens · 用过 ' + r.calls + ' 次'
+                      )
+                    ),
+                    h(
+                      'div',
+                      {
+                        style: {
+                          height: '6px',
+                          borderRadius: '3px',
+                          background: 'rgba(127,127,127,0.15)',
+                          marginTop: '2px',
+                          overflow: 'hidden',
+                        },
+                      },
+                      h('div', {
+                        style: {
+                          height: '100%',
+                          width: w + '%',
+                          background: idle ? BAR_IDLE : BAR_USED,
+                          borderRadius: '3px',
+                        },
+                      })
+                    )
+                  )
+                }),
+                h(
+                  'div',
+                  {
+                    key: 'legend',
+                    style: { fontSize: '11px', color: palette.dim, marginTop: '8px' },
+                  },
+                  '蓝 = 本会话用过　红 = 用过 0 次（可关候选）　' +
+                    '完整清单与关闭方式：cost(action="disable")'
+                )
               )
             )
-          )
+          }
         }
 
         return h(
