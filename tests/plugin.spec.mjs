@@ -141,3 +141,140 @@ test('未知 action 抛错（走 dsh 工具管道的错误路径）', async () =
   plugin.apply({ tools: { register: (t) => tools.push(t) }, on: () => {} })
   await assert.rejects(() => tools[0].execute({ action: 'nope' }), /unknown action/)
 })
+
+// ---------- 契约回归：两个在真实 DSH 里踩到的坑 ----------
+
+test('【坑1】工具用 exec.agent 的会话 cwd 定位规则库，而不是 process.cwd()', async () => {
+  plugin = await import(pathToFileURL(join(ROOT, 'index.mjs')).href)
+  const tools = []
+  plugin.apply({ tools: { register: (t) => tools.push(t) }, on: () => {} })
+  const tool = tools[0]
+
+  const project = makeInstalledProject()
+  try {
+    // 关键：把 process.cwd() 指向一个**没有**规则库的地方，
+    // 只让 agent.session.header.cwd 指向有规则库的项目。
+    // 如果实现退回 process.cwd()，这条就会失败。
+    const prevCwd = process.cwd()
+    process.chdir(ROOT) // F:\agent-constraints 本身没有 agent-constraints/ 子目录
+    try {
+      const fakeAgent = { session: { header: { cwd: project } } }
+      const p = await tool.execute({ action: 'path' }, { agent: fakeAgent })
+      assert.ok(
+        p.startsWith(project),
+        `应当用会话 cwd 定位规则库，实际返回: ${p}`
+      )
+    } finally {
+      process.chdir(prevCwd)
+    }
+  } finally {
+    rmSync(project, { recursive: true, force: true })
+  }
+})
+
+test('【坑1】没有 agent 上下文时降级到 process.cwd()，不抛错', async () => {
+  plugin = await import(pathToFileURL(join(ROOT, 'index.mjs')).href)
+  const tools = []
+  plugin.apply({ tools: { register: (t) => tools.push(t) }, on: () => {} })
+
+  // exec 缺失 / agent 缺失 / session 缺失 —— 都不该崩
+  for (const exec of [undefined, {}, { agent: {} }, { agent: { session: {} } }]) {
+    const msg = await tools[0].execute({ action: 'where' }, exec)
+    const diag = JSON.parse(msg)
+    assert.equal(typeof diag.cwd使用值, 'string')
+    assert.ok(diag.cwd使用值.length > 0, '必须始终有一个可用的 cwd')
+  }
+})
+
+test('where 动作返回解析诊断（排障用）', async () => {
+  plugin = await import(pathToFileURL(join(ROOT, 'index.mjs')).href)
+  const tools = []
+  plugin.apply({ tools: { register: (t) => tools.push(t) }, on: () => {} })
+
+  const project = makeInstalledProject()
+  try {
+    const msg = await tools[0].execute(
+      { action: 'where' },
+      { agent: { session: { header: { cwd: project } } } }
+    )
+    const diag = JSON.parse(msg)
+    assert.equal(diag.agent可用, true)
+    assert.equal(diag.session可用, true)
+    assert.ok(String(diag.规则库).startsWith(project), '诊断里应给出找到的规则库路径')
+  } finally {
+    rmSync(project, { recursive: true, force: true })
+  }
+})
+
+test('【坑2】agent/pre-step 返回合法的 PreStepDecision，消息并入末尾', async () => {
+  plugin = await import(pathToFileURL(join(ROOT, 'index.mjs')).href)
+  const handlers = {}
+  plugin.apply({
+    tools: { register: () => {} },
+    on: (evt, handler) => { handlers[evt] = handler },
+  })
+  const handler = handlers['agent/pre-step']
+  assert.equal(typeof handler, 'function', '应当监听 agent/pre-step')
+
+  const project = makeInstalledProject()
+  try {
+    const payload = {
+      agent: { session: { header: { cwd: project } } },
+      messages: [{ role: 'user', content: [{ type: 'text', text: '人类输入' }] }],
+      turn: 1,
+      step: 1,
+      signal: new AbortController().signal,
+    }
+    const original = { kind: 'enter', messages: payload.messages }
+    const decision = await handler(payload, async () => original)
+
+    // 必须仍是合法的 PreStepDecision
+    assert.equal(decision.kind, 'enter')
+    assert.ok(Array.isArray(decision.messages))
+    // 人类输入必须还在最前（我们的提示只能追加在后面）
+    assert.equal(decision.messages[0], payload.messages[0], '人类输入不能被挤走')
+    // 必须多出一条注入
+    assert.equal(decision.messages.length, 2)
+    const injected = decision.messages[1]
+    assert.equal(injected.role, 'user', 'UserMessage 必须带 role: "user"')
+    assert.ok(Array.isArray(injected.content), 'UserMessage 必须带 content 数组')
+    assert.match(injected.content[0].text, /开发约束 · 来自 agent-constraints/)
+    assert.match(injected.content[0].text, /R-001/, '注入的应是 L0 铁律标题')
+  } finally {
+    rmSync(project, { recursive: true, force: true })
+  }
+})
+
+test('【坑2】reject 决定原样透传，且不注入', async () => {
+  plugin = await import(pathToFileURL(join(ROOT, 'index.mjs')).href)
+  const handlers = {}
+  plugin.apply({
+    tools: { register: () => {} },
+    on: (evt, handler) => { handlers[evt] = handler },
+  })
+
+  const rejected = { kind: 'reject' }
+  const decision = await handlers['agent/pre-step']({ agent: {} }, async () => rejected)
+  assert.deepEqual(decision, rejected, 'reject 必须原样返回，不能改成 enter')
+})
+
+test('【坑2】没有规则库时不注入（保留原批次）', async () => {
+  plugin = await import(pathToFileURL(join(ROOT, 'index.mjs')).href)
+  const handlers = {}
+  plugin.apply({
+    tools: { register: () => {} },
+    on: (evt, handler) => { handlers[evt] = handler },
+  })
+
+  const empty = mkdtempSync(join(process.env.TEMP || '/tmp', 'adc-nolib-'))
+  try {
+    const msgs = [{ role: 'user', content: [{ type: 'text', text: 'x' }] }]
+    const decision = await handlers['agent/pre-step'](
+      { agent: { session: { header: { cwd: empty } } } },
+      async () => ({ kind: 'enter', messages: msgs })
+    )
+    assert.equal(decision.messages.length, 1, '找不到规则库时不该多塞消息')
+  } finally {
+    rmSync(empty, { recursive: true, force: true })
+  }
+})
