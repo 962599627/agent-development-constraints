@@ -276,9 +276,14 @@ function analyzeSession(exec) {
     const session = exec && exec.agent && exec.agent.session
     if (!session) return { error: '拿不到 session 对象' }
 
-    // 事件列表：不同版本可能挂在不同字段上，逐个尝试
+    // 事件列表：不同版本可能挂在不同字段上，逐个尝试。
+    //
+    // ⚠️ 实测（2026-10-05）：`session.log` **本身就是事件数组**
+    // （logKeys 是 "0","1",...,"11907"），而 `log.events` 是 undefined。
+    // 所以第一个候选就是 log 本身。
     let events = null
     const candidates = [
+      () => session.log, // ★ 实测就是它
       () => session.eventsSnapshot,
       () => session.log && session.log.events,
       () => (typeof session.events === 'function' ? session.events() : session.events),
@@ -297,16 +302,30 @@ function analyzeSession(exec) {
     if (!events) {
       // 诊断：把每个候选的真实类型报出来，而不是只说"读不到"。
       // （C-012：给数据打报告，不要凭印象。）
+      //
+      // ⚠️ 诊断**必须有边界**：第一次实现把 logKeys 全列出来了，
+      // 结果输出 118KB —— 诊断本身成了成本。只留前几个 + 总数。
       const shape = (v) => {
         if (v === null) return 'null'
         if (Array.isArray(v)) return 'array(' + v.length + ')'
         return typeof v
       }
+      const keysPreview = (obj) => {
+        if (!obj || typeof obj !== 'object') return null
+        const ks = Object.keys(obj)
+        return {
+          总数: ks.length,
+          前5个: ks.slice(0, 5),
+          看起来像数组索引: ks.length > 0 && ks[0] === '0' && ks[ks.length - 1] === String(ks.length - 1),
+        }
+      }
       let logShape = 'n/a'
-      let logKeys = null
+      let logPreview = null
       try {
         if (session.log) {
-          logKeys = Object.keys(session.log)
+          // ⚠️ 不要保存 Object.keys(session.log) —— 实测它可能是 11908 个索引，
+          // 存下来再序列化就是 118KB 的诊断输出。直接用预览函数。
+          logPreview = keysPreview(session.log)
           logShape =
             'Object{ log.events=' +
             shape(session.log.events) +
@@ -321,14 +340,9 @@ function analyzeSession(exec) {
         error: '读不到 session 事件列表',
         诊断: {
           eventsSnapshot: shape(session.eventsSnapshot),
-          eventsSnapshotKeys:
-            session.eventsSnapshot &&
-            typeof session.eventsSnapshot === 'object' &&
-            !Array.isArray(session.eventsSnapshot)
-              ? Object.keys(session.eventsSnapshot)
-              : null,
+          eventsSnapshotPreview: keysPreview(session.eventsSnapshot),
           log: logShape,
-          logKeys,
+          logPreview,
           derivedNodes: shape(session.derivedNodes),
           toolHistoryProjection: shape(session.toolHistoryProjection),
           firstLiveSeq: shape(session.firstLiveSeq),
