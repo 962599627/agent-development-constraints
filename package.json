@@ -23,17 +23,24 @@
   "main": "index.mjs",
   "exports": {
     ".": "./index.mjs",
+    "./client": "./dsh/client.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [],
+      "platform": "web",
+      "immediately": true
     }
   },
   "comment:zero-deps": "刻意不声明任何 @deepseek-ai/* 依赖：profile 里配了 autoInstallPeers:false，peer 依赖不会被安装，顶层 import 会直接让插件加载失败并拖垮宿主会话。见 index.mjs 文件头的「错误 1」。",
   "files": [
     "index.mjs",
+    "dsh/",
     "cordis.patch.yml",
     "bin/",
     "core/",

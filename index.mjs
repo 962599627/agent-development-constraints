@@ -92,6 +92,23 @@ function writeProbe(stage, extra) {
 const CONSTRAINTS_REL = join('agent-constraints', 'core', 'constraints.md')
 
 /**
+ * 「每步注入」开关。
+ *
+ * 目前是常量 —— 卡片上的开关需要把设置持久化到 host 的 settings 服务，
+ * 那部分还没做。先把真实值暴露给卡片显示，免得卡片显示一个不存在的东西。
+ */
+const INJECT_ENABLED = false
+
+/**
+ * 最近一次 `agent/pre-step` 观察到的会话 cwd。
+ *
+ * 状态路由（HTTP handler）里**没有 agent**，拿不到 session.header.cwd，
+ * 所以由 pre-step 顺手记下来，路由读这个值。
+ * 还没发过消息时是 null，路由会退回 process.cwd() 并标明来源。
+ */
+let lastObservedCwd = null
+
+/**
  * 取会话的工作目录。
  *
  * ⚠️ 不要用 `process.cwd()` —— DSH 是 Electron 应用，插件进程的工作目录是
@@ -397,6 +414,15 @@ export function apply(ctx) {
           throw err
         }
         try {
+          // 顺便记录真实 UserMessage 的结构 —— 写注入时必须照着它拼。
+          // 上次崩很可能就是因为我凭文档猜了一个不完整的 message 对象。
+          const first =
+            decision && Array.isArray(decision.messages) ? decision.messages[0] : null
+          // 记下会话 cwd，状态路由要用（路由里没有 agent）
+          try {
+            const c = getCwd(payload && payload.agent)
+            if (c) lastObservedCwd = c
+          } catch {}
           writeProbe('pre-step-observed', {
             decisionType: typeof decision,
             decisionIsUndefined: decision === undefined,
@@ -413,6 +439,30 @@ export function apply(ctx) {
             payloadKeys:
               payload && typeof payload === 'object' ? Object.keys(payload) : null,
             payloadHasAgent: Boolean(payload && payload.agent),
+            // —— 下面这段是为了拿到 UserMessage 的精确形状 ——
+            firstMessage: first
+              ? {
+                  keys: Object.keys(first),
+                  role: first.role,
+                  hasId: 'id' in first,
+                  idType: typeof first.id,
+                  hasSource: 'source' in first,
+                  sourceKeys: first.source ? Object.keys(first.source) : null,
+                  contentType: typeof first.content,
+                  contentIsArray: Array.isArray(first.content),
+                  contentLength: Array.isArray(first.content)
+                    ? first.content.length
+                    : null,
+                  contentBlockKeys:
+                    Array.isArray(first.content) && first.content[0]
+                      ? Object.keys(first.content[0])
+                      : null,
+                  contentBlockType:
+                    Array.isArray(first.content) && first.content[0]
+                      ? first.content[0].type
+                      : null,
+                }
+              : null,
           })
         } catch {
           // 探针失败不影响返回值
@@ -422,6 +472,63 @@ export function apply(ctx) {
       writeProbe('pre-step-listener-registered', { ok: true })
     } catch (err) {
       writeProbe('pre-step-listen-failed', { error: err && err.message })
+    }
+  }
+
+  // ---------- 状态路由：给客户端卡片读 ----------
+  //
+  // 卡片（dsh/client.js）通过 GET /agent-development-constraints/status 拿运行时状态。
+  // 注册方式照 @liustack/modlens 的 registerConfigRoute：
+  //   scope.webServer.register({ name, kind: 'exact', path, handler })
+  //
+  // webServer 只在 web profile 存在，所以走 scoped ctx.inject —— 服务不存在时
+  // 闭包根本不跑，不会抛错。
+  if (ctx && typeof ctx.inject === 'function') {
+    try {
+      ctx.inject(['webServer'], (scope) => {
+        try {
+          scope.webServer.register({
+            name: 'agent-constraints-status',
+            kind: 'exact',
+            path: '/agent-development-constraints/status',
+            handler: async (req, res) => {
+              const send = (code, body) => {
+                try {
+                  res.writeHead(code, { 'content-type': 'application/json' })
+                  res.end(JSON.stringify(body))
+                } catch {
+                  // 响应已发出，忽略
+                }
+              }
+              if (req.method !== 'GET') {
+                send(405, { error: 'method not allowed' })
+                return
+              }
+              try {
+                // cwd 优先用最近一次 pre-step 观察到的会话目录；
+                // 没有观测过（还没发过消息）时退回进程 cwd。
+                const cwd = lastObservedCwd || process.cwd()
+                const found = loadConstraints(cwd)
+                send(200, {
+                  name: 'agent-development-constraints',
+                  constraintsPath: found ? found.path : null,
+                  cwd,
+                  cwdSource: lastObservedCwd ? 'session' : 'process',
+                  injectEnabled: INJECT_ENABLED,
+                  probeFile: join(homedir(), '.dsh', 'agent-constraints-probe.json'),
+                })
+              } catch (err) {
+                send(500, { error: (err && err.message) || String(err) })
+              }
+            },
+          })
+          writeProbe('status-route-registered', { ok: true })
+        } catch (err) {
+          writeProbe('status-route-failed', { error: err && err.message })
+        }
+      })
+    } catch (err) {
+      writeProbe('status-route-inject-failed', { error: err && err.message })
     }
   }
 }
