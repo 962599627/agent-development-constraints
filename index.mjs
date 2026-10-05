@@ -664,14 +664,100 @@ function suggestDisable(exec, minTokens = 200) {
 let lastObservedCwd = null
 
 /**
- * 上下文占用审计的缓存（只算一次）。
+ * 最近一次 `agent/pre-step` 看到的 agent 引用。
+ *
+ * ⚠️ 为什么需要它：状态路由是 HTTP handler，**没有 agent/exec**，
+ * 因此拿不到 `ctx.tools.schemas()`，算不出上下文占用。
+ *
+ * 最初的做法是"在 pre-step 里算好并缓存，路由只读缓存"，但**有时序缺口**：
+ * 卡片可能在 pre-step 触发之前就被打开，那时缓存是 null，
+ * 于是卡片一片空白 —— 而且卡片只在挂载时 fetch 一次，不会自己变好。
+ * （实测就是这个现象：状态路由返回了完整数据，卡片却不显示。）
+ *
+ * 所以改为：pre-step 记下 agent，路由**按需**计算。
+ * 这样无论何时打开卡片都能拿到数据。缓存仍保留，避免每次 HTTP 请求都重算。
+ */
+let lastObservedAgent = null
+
+/**
+ * 上下文占用审计的缓存。
  *
  * ⚠️ 状态路由是 HTTP handler，**没有 agent/exec**，拿不到 ctx.tools.schemas()。
  * 所以在 pre-step 里（那里有 payload.agent）算一次并缓存下来供卡片读取。
  * 占用在会话内是稳定的（工具集不变），算一次就够 —— 每步重算会是
  * C-011 说的那种常驻浪费。
+ *
+ * 若缓存为空但 `lastObservedAgent` 有值，路由会现场补算一次（见 status 路由）。
  */
 let lastAuditCache = null
+
+/**
+ * 算出卡片要用的「上下文占用 + 工具使用情况」摘要。
+ *
+ * ⚠️ 抽成函数而不是内联在 pre-step 里，是为了让**状态路由也能按需调用**：
+ * 卡片可能在 pre-step 触发之前就被打开，那时缓存还是 null。
+ * 抽出来之后，路由发现缓存为空且手上有 agent，就现场补算一次。
+ *
+ * ⚠️ 使用数据用**跨会话**，与 `suggestDisable` 保持同一判据 ——
+ * 否则卡片把"本期没用过"的工具标红，而 `cost(action="disable")`
+ * 因为历史里用过而不列它，同一个插件给出两个矛盾结论。
+ *
+ * 代价约 450 ms（要解压多个历史会话文件），所以调用方应当缓存结果。
+ * 任何异常都返回 null —— 卡片少一块，绝不影响会话。
+ */
+function computeAuditCache(agent) {
+  try {
+    const audit = auditToolSchemas({ agent })
+    if (!audit || audit.error) return null
+
+    const history = analyzeRecentSessions()
+    const used = {}
+    let usedBasis = ''
+    if (history.distinctToolsUsed > 0) {
+      for (const r of history.ranking) used[r.name] = r.calls
+      usedBasis = '跨会话 ' + history.sessionsScanned + ' 个会话'
+    } else {
+      // 历史读不到 → 降级为当前会话，并**标注**降级
+      const sess = analyzeSession({ agent })
+      if (sess && sess.工具调用) {
+        for (const row of sess.工具调用.排名) used[row.name] = row.calls
+      }
+      usedBasis = '仅当前会话（历史不可读）'
+    }
+
+    // 完整的逐工具明细 —— 卡片拿它画条形图。
+    // ⚠️ 可以放心给全量：卡片走 HTTP 拿数据，**不进 AI 上下文**，没有 token 成本。
+    const rows = (audit.all || []).map((r) => ({
+      name: r.name,
+      tokens: r.approxTokens,
+      calls: used[r.name] || 0,
+    }))
+    rows.sort((a, b) => b.tokens - a.tokens)
+
+    let savable = 0
+    const candidates = []
+    for (const r of rows) {
+      if (r.tokens < 200) continue
+      if (r.calls > 0) continue
+      savable += r.tokens
+      candidates.push(r.name)
+    }
+
+    return {
+      toolCount: audit.count,
+      totalApproxTokens: audit.totalApproxTokens,
+      savableApproxTokens: savable,
+      candidates: candidates.slice(0, 8),
+      candidateCount: candidates.length,
+      sessionToolsUsed: history.distinctToolsUsed || null,
+      usedBasis,
+      // 前 15 个逐条明细，供卡片画条形图
+      top: rows.slice(0, 15),
+    }
+  } catch {
+    return null
+  }
+}
 
 /**
  * 取会话的工作目录。
@@ -1151,69 +1237,16 @@ export function apply(ctx) {
             if (c && !lastObservedCwd) lastObservedCwd = c
             const pa = payload && payload.agent
             const psess = pa && pa.session
-            // 顺带把「上下文占用审计」算一次并缓存 —— 状态路由（HTTP handler）
-            // 里没有 agent/exec，拿不到 ctx.tools.schemas()，所以必须在这里算。
-            //
-            // ⚠️ 只算一次：schemas() + JSON.stringify 29 个工具不便宜，
-            // 而占用是会话内稳定的（工具集不变）。pre-step 每步都跑，
-            // 绝不能每步都重算（那是 C-011 说的常驻成本）。
+            // 记下 agent 引用：状态路由（HTTP handler）里没有 agent，
+            // 但它需要在卡片打开时**按需**算出上下文占用。
+            // 只记引用不算数据 —— 计算交给 computeAuditCache，避免每步重算。
+            if (pa) lastObservedAgent = pa
+
+            // 算一次并缓存（占用在会话内稳定：工具集不变）。
+            // ⚠️ 只算一次的原因：schemas() + 多 frame 解压历史会话约 450 ms，
+            // 而 pre-step 每步都跑 —— 每步重算就是 C-011 说的常驻浪费。
             if (!lastAuditCache) {
-              try {
-                const audit = auditToolSchemas({ agent: pa })
-                if (audit && !audit.error) {
-                  // ⚠️ 用**跨会话**使用数据，和 suggestDisable 保持同一判据。
-                  // 否则卡片会把"本期没用过"的工具标红，而 cost(action="disable")
-                  // 却因为历史里用过而不列它 —— 同一个插件给出两个矛盾结论。
-                  // （代价：约 450 ms，但只在 pre-step 首次跑一次。）
-                  const history = analyzeRecentSessions()
-                  const used = {}
-                  let usedBasis = ''
-                  if (history.distinctToolsUsed > 0) {
-                    for (const r of history.ranking) used[r.name] = r.calls
-                    usedBasis = '跨会话 ' + history.sessionsScanned + ' 个会话'
-                  } else {
-                    // 历史读不到 → 降级为当前会话，并标注
-                    const sess = analyzeSession({ agent: pa })
-                    if (sess && sess.工具调用) {
-                      for (const row of sess.工具调用.排名) used[row.name] = row.calls
-                    }
-                    usedBasis = '仅当前会话（历史不可读）'
-                  }
-
-                  // 完整的逐工具明细 —— 卡片要拿它画条形图。
-                  // ⚠️ 这里可以放心给全量：卡片走 HTTP 拿数据，
-                  // **不进 AI 上下文**，所以没有 token 成本。
-                  const rows = (audit.all || []).map((r) => ({
-                    name: r.name,
-                    tokens: r.approxTokens,
-                    calls: used[r.name] || 0,
-                  }))
-                  rows.sort((a, b) => b.tokens - a.tokens)
-
-                  let savable = 0
-                  const candidates = []
-                  for (const r of rows) {
-                    if (r.tokens < 200) continue
-                    if (r.calls > 0) continue
-                    savable += r.tokens
-                    candidates.push(r.name)
-                  }
-
-                  lastAuditCache = {
-                    toolCount: audit.count,
-                    totalApproxTokens: audit.totalApproxTokens,
-                    savableApproxTokens: savable,
-                    candidates: candidates.slice(0, 8),
-                    candidateCount: candidates.length,
-                    sessionToolsUsed: history.distinctToolsUsed || null,
-                    usedBasis,
-                    // 前 15 个逐条明细，供卡片画条形图
-                    top: rows.slice(0, 15),
-                  }
-                }
-              } catch {
-                // 缓存失败不影响任何事
-              }
+              lastAuditCache = computeAuditCache(pa)
             }
             writeProbe('cwd-probe', {
               got: c || null,
@@ -1401,7 +1434,10 @@ export function apply(ctx) {
                 }
 
                 // GET：状态 + 当前配置 + 成本摘要
-                const cwd = lastObservedCwd || process.cwd()
+                // ⚠️ cwd 优先用 pre-step 观测到的；若还没观测到但有 agent 引用，
+                // **现场从 agent 里取**（与 contextAudit 同理，别让卡片显示无意义的进程 cwd）。
+                const observedCwd = lastObservedCwd || (lastObservedAgent ? getCwd(lastObservedAgent) : null)
+                const cwd = observedCwd || process.cwd()
                 const found = loadConstraints(cwd)
                 const usage = loadUsage()
                 send(200, {
@@ -1409,12 +1445,15 @@ export function apply(ctx) {
                   version: readOwnVersion(),
                   constraintsPath: found ? found.path : null,
                   cwd,
-                  cwdSource: lastObservedCwd ? 'session' : 'process',
+                  cwdSource: observedCwd ? 'session' : 'process',
                   injectEnabled: configInjectEnabled(),
                   configFile: CONFIG_FILE,
                   probeFile: join(homedir(), '.dsh', 'agent-constraints-probe.json'),
-                  // 上下文占用摘要（在 pre-step 里算一次并缓存；还没有就是 null）
-                  contextAudit: lastAuditCache,
+                  // 上下文占用摘要。
+                  // ⚠️ 缓存为空但手上有 agent 时**现场补算** ——
+                  // 卡片可能在 pre-step 触发之前就被打开（而且它只 fetch 一次），
+                  // 只读缓存会让卡片一片空白。实测就是这个现象。
+                  contextAudit: lastAuditCache || (lastObservedAgent ? computeAuditCache(lastObservedAgent) : null),
                   // 成本摘要（卡片显示用；拿不到就是 null）
                   cost: usage
                     ? {
