@@ -124,7 +124,11 @@ Write-Host "  1) GitHub Release（让版本在仓库首页可见）"
 Write-Host "     https://github.com/962599627/agent-development-constraints/releases/new?tag=$tag"
 Write-Host "     标题填 $version，正文从 CHANGELOG.md 对应段落复制`n"
 Write-Host "  2) 发布到 npm（发布之后，README 里的短形式 npx 才成立）"
-Write-Host "     npm login          # 只需一次"
+# ⚠️ 登录必须指定 registry：很多国内环境默认是淘宝镜像
+  #    （registry.npmmirror.com），直接 `npm login` 会登录到**镜像**，
+  #    之后 publish 也就发到镜像 —— 命令「成功」但 npm 官方源上永远没有这个包。
+  Write-Host "     npm login --registry https://registry.npmjs.org/"
+  Write-Host "                        # ⚠️ 必须带 --registry，否则会登录到镜像" -ForegroundColor Yellow
 Write-Host "     npm publish        # 本包未设 private，files 白名单已在 package.json 里`n"
 Write-Host "  3) 发布 npm 之后，把 README / index.mjs 里的 github: 前缀换回短形式"
 Write-Host "     （tests/plugin.spec.mjs 的【发布】用例会提醒你哪些地方要改）`n"
