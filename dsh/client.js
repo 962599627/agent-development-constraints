@@ -251,6 +251,37 @@ window.__ModuleLoader__.load({
           )
         )
 
+        // ---------- 成本 ----------
+        // 数据来自 DSH 自己的用量账本（usage-ledger.json），只读不改。
+        // 摆出来是因为：看不见的成本没法优化。
+        var cost = status && status.cost
+        if (cost) {
+          var cacheRatio =
+            cost.todayInputTokens > 0
+              ? (cost.todayCacheReadTokens / cost.todayInputTokens).toFixed(1) + '×'
+              : '—'
+          children.push(
+            h(
+              'div',
+              {
+                key: 'cost',
+                style: {
+                  marginTop: '10px',
+                  padding: '10px 12px',
+                  border: '1px solid ' + palette.border,
+                  borderRadius: '10px',
+                  background: palette.bg,
+                },
+              },
+              row('今日成本', (cost.todayCost || 0).toFixed(2) + ' ' + (cost.currency || '')),
+              row('今日调用', String(cost.todayCalls || 0) + ' 次'),
+              row('今日 tokens', '入 ' + (cost.todayInputTokens || 0) + ' / 出 ' + (cost.todayOutputTokens || 0)),
+              row('缓存读取', (cost.todayCacheReadTokens || 0) + '（是输入的 ' + cacheRatio + '）'),
+              cost.balance ? row('账户余额', cost.balance + ' ' + (cost.currency || '')) : null
+            )
+          )
+        }
+
         return h(
           'div',
           { style: { padding: isPage ? '0' : '12px 14px' } },

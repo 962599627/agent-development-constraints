@@ -111,7 +111,11 @@ test('【事故2】apply 只注册工具 + 观察 pre-step，不监听其它事�
   const ctx = makeCtx()
   plugin.apply(ctx)
 
-  assert.equal(ctx._tools.length, 1, '应注册且只注册一个工具')
+  assert.deepEqual(
+    ctx._tools.map((t) => t.name),
+    ['constraints', 'cost'],
+    '应注册 constraints 与 cost 两个工具'
+  )
 
   // ⚠️ 从"完全不许监听"放宽到"只许监听 agent/pre-step"。
   //

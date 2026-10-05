@@ -134,6 +134,128 @@ function configInjectEnabled() {
   return loadConfig().inject !== false
 }
 
+// ---------------------------------------------------------------------------
+// 成本感知（cost awareness）
+// ---------------------------------------------------------------------------
+//
+// 数据来源：`~/.dsh/dsh-usage/usage-ledger.json`（DSH 自己维护的用量账本）
+// 与 `provider-snapshots.json`（余额）。
+//
+// ## 为什么值得做
+//
+// 真实账本长这样（2026-10-05，deepseek-flash）：
+//   inputTokens      4,107,108
+//   outputTokens     1,453,735
+//   cacheReadTokens  548,846,976     ← 是输入的 134 倍
+//   calls            1,472
+//   cost             29.42 元
+//
+// 缓存读取单价低，但 5.5 亿的量仍然吃掉近 30 元/天。
+// 这印证了 C-011：**常驻内容的成本 = 大小 × 调用次数**，而不是大小本身。
+//
+// 所以这个模块做两件事：
+//   ① 把账本数字摆出来 —— 让成本可见（看不见的东西没法优化）
+//   ② 审计工具 schema 的占用排名 —— 找出谁在占上下文
+
+const USAGE_LEDGER = join(homedir(), '.dsh', 'dsh-usage', 'usage-ledger.json')
+const PROVIDER_SNAPSHOTS = join(homedir(), '.dsh', 'dsh-usage', 'provider-snapshots.json')
+
+function loadJsonSafe(p) {
+  try {
+    if (!existsSync(p)) return null
+    return JSON.parse(readFileSync(p, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+/** 读用量账本，汇总"今天"与"累计" */
+function loadUsage() {
+  const ledger = loadJsonSafe(USAGE_LEDGER)
+  if (!ledger || !ledger.days) return null
+
+  const todayKey = new Date().toISOString().slice(0, 10)
+  const sum = (days) => {
+    const t = {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      calls: 0,
+      cost: 0,
+    }
+    for (const day of days) {
+      const providers = ledger.days[day] || {}
+      for (const models of Object.values(providers)) {
+        for (const m of Object.values(models || {})) {
+          t.inputTokens += m.inputTokens || 0
+          t.outputTokens += m.outputTokens || 0
+          t.cacheReadTokens += m.cacheReadTokens || 0
+          t.cacheWriteTokens += m.cacheWriteTokens || 0
+          t.calls += m.calls || 0
+          t.cost += m.cost || 0
+        }
+      }
+    }
+    return t
+  }
+
+  const allDays = Object.keys(ledger.days)
+  const snap = loadJsonSafe(PROVIDER_SNAPSHOTS)
+  const deepseek =
+    snap && snap.providers ? snap.providers['deepseek-official'] : null
+  const balance = deepseek && deepseek.balance ? deepseek.balance : null
+
+  return {
+    today: sum(allDays.filter((d) => d === todayKey)),
+    total: sum(allDays),
+    dayCount: allDays.length,
+    todayKey,
+    balance: balance ? balance.totalBalance : null,
+    currency: balance ? balance.currency : null,
+  }
+}
+
+/**
+ * 审计工具 schema 的上下文占用。
+ *
+ * ⚠️ 这是"省 token"最有用的一项输出：工具 schema 是**每个请求都发**的常驻成本，
+ * 但通常没人知道哪个工具最占地方。列出来，优化才有靶子。
+ */
+function auditToolSchemas(exec) {
+  try {
+    const agentCtx = exec && exec.agent && exec.agent.ctx
+    const tools = agentCtx && agentCtx.tools
+    if (!tools || typeof tools.schemas !== 'function') {
+      return { error: 'ctx.tools.schemas() 不可用，拿不到工具 schema' }
+    }
+    const schemas = tools.schemas() || []
+    const rows = schemas.map((s) => {
+      let text = ''
+      try {
+        text = JSON.stringify(s)
+      } catch {
+        text = ''
+      }
+      return {
+        name: s && s.name ? s.name : '(unnamed)',
+        chars: text.length,
+        approxTokens: Math.round(text.length / 3.5),
+      }
+    })
+    rows.sort((a, b) => b.chars - a.chars)
+    const totalChars = rows.reduce((n, r) => n + r.chars, 0)
+    return {
+      count: rows.length,
+      totalChars,
+      totalApproxTokens: Math.round(totalChars / 3.5),
+      top: rows.slice(0, 10),
+    }
+  } catch (err) {
+    return { error: (err && err.message) || String(err) }
+  }
+}
+
 /**
  * 最近一次 `agent/pre-step` 观察到的会话 cwd。
  *
@@ -347,6 +469,118 @@ function buildConstraintsTool() {
   }
 }
 
+/**
+ * 构造 `cost` 工具的 ToolDefinition —— 成本感知。
+ *
+ * ⚠️ 和 constraints 不同：它是**按需调用**的，平时零成本。
+ * 常驻的只有下面这段 description（每个请求都发），所以写得尽量短。
+ */
+function buildCostTool() {
+  return {
+    name: 'cost',
+    description:
+      '查看 AI 用量与成本，并审计上下文里谁最占地方。' +
+      'action: show=今日/累计用量与成本 / audit=工具 schema 占用排名 / tips=优化建议。',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['show', 'audit', 'tips'],
+          description: 'show|audit|tips',
+        },
+      },
+      required: ['action'],
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value) => [{ type: 'text', text: String(value) }],
+    },
+    timeoutMs: 3000,
+    isConcurrencySafe: () => true,
+    async execute(args, exec) {
+      const action = args && typeof args.action === 'string' ? args.action : ''
+
+      if (action === 'audit') {
+        return JSON.stringify(auditToolSchemas(exec), null, 2)
+      }
+
+      if (action === 'tips') {
+        const usage = loadUsage()
+        const audit = auditToolSchemas(exec)
+        const tips = []
+        if (usage && usage.total.calls > 0) {
+          const ratio =
+            usage.total.cacheReadTokens / Math.max(1, usage.total.inputTokens)
+          tips.push(
+            `累计 cacheRead / input = ${ratio.toFixed(1)} 倍。` +
+              '这个比例说明**每一轮都在重发整个上下文前缀** —— ' +
+              '缓存单价低，但量一大仍然贵。减少常驻内容（工具 schema、系统提示）比减少对话内容更有效。'
+          )
+        }
+        if (audit && audit.top && audit.top.length) {
+          const biggest = audit.top[0]
+          tips.push(
+            `当前工具 schema 共约 ${audit.totalApproxTokens} tokens/请求，` +
+              `最大的是 \`${biggest.name}\`（约 ${biggest.approxTokens} tokens）。` +
+              '工具 schema 每个请求都发，是纯粹的常驻成本 —— 不需要的工具应当移出作用域。'
+          )
+        }
+        tips.push(
+          '长会话的上下文会持续增长 → 每轮重发更多。' +
+            '做完整一个阶段就开新会话，比在一个超长会话里继续更省。'
+        )
+        return tips.map((t, i) => `${i + 1}. ${t}`).join('\n\n')
+      }
+
+      if (action === 'show') {
+        const usage = loadUsage()
+        if (!usage) {
+          return JSON.stringify(
+            {
+              error: '读不到用量账本',
+              expected: USAGE_LEDGER,
+              hint: 'DSH 的用量账本由 harness 自己维护，可能是首次运行还没生成',
+            },
+            null,
+            2
+          )
+        }
+        const pct = (n, d) => (d > 0 ? ((n / d) * 100).toFixed(1) + '%' : '—')
+        return JSON.stringify(
+          {
+            今日: {
+              日期: usage.todayKey,
+              输入tokens: usage.today.inputTokens,
+              输出tokens: usage.today.outputTokens,
+              缓存读取tokens: usage.today.cacheReadTokens,
+              调用次数: usage.today.calls,
+              成本: Number(usage.today.cost.toFixed(4)),
+              缓存读取是输入的: pct(usage.today.cacheReadTokens, usage.today.inputTokens),
+            },
+            累计: {
+              天数: usage.dayCount,
+              输入tokens: usage.total.inputTokens,
+              输出tokens: usage.total.outputTokens,
+              缓存读取tokens: usage.total.cacheReadTokens,
+              调用次数: usage.total.calls,
+              成本: Number(usage.total.cost.toFixed(4)),
+            },
+            余额: usage.balance ? `${usage.balance} ${usage.currency || ''}`.trim() : null,
+            数据来源: USAGE_LEDGER,
+          },
+          null,
+          2
+        )
+      }
+
+      throw new Error(
+        `cost: unknown action ${JSON.stringify(action)}（可用：show / audit / tips）`
+      )
+    },
+  }
+}
+
 export function apply(ctx) {
   // ---------- 注册 constraints 工具 ----------
   //
@@ -390,13 +624,28 @@ export function apply(ctx) {
   function registerTool(scope, via) {
     try {
       if (scope && scope.tools && typeof scope.tools.register === 'function') {
-        scope.tools.register(buildConstraintsTool())
+        const registered = []
+        const failures = []
+        // 两个工具各自独立 try —— 一个失败不该拖累另一个
+        for (const [label, build] of [
+          ['constraints', buildConstraintsTool],
+          ['cost', buildCostTool],
+        ]) {
+          try {
+            scope.tools.register(build())
+            registered.push(label)
+          } catch (err) {
+            failures.push(label + ': ' + ((err && err.message) || String(err)))
+          }
+        }
         writeProbe('tool-registered', {
           via,
           hasTools: true,
+          registered,
+          failures: failures.length ? failures : null,
           toolsKeys: Object.keys(scope.tools),
         })
-        return true
+        return registered.length > 0
       }
       writeProbe('tool-register-skipped', {
         via,
@@ -668,18 +917,35 @@ export function apply(ctx) {
                   return
                 }
 
-                // GET：状态 + 当前配置
+                // GET：状态 + 当前配置 + 成本摘要
                 const cwd = lastObservedCwd || process.cwd()
                 const found = loadConstraints(cwd)
+                const usage = loadUsage()
                 send(200, {
                   name: 'agent-development-constraints',
-                  version: '0.10.0',
+                  version: '0.11.0',
                   constraintsPath: found ? found.path : null,
                   cwd,
                   cwdSource: lastObservedCwd ? 'session' : 'process',
                   injectEnabled: configInjectEnabled(),
                   configFile: CONFIG_FILE,
                   probeFile: join(homedir(), '.dsh', 'agent-constraints-probe.json'),
+                  // 成本摘要（卡片显示用；拿不到就是 null）
+                  cost: usage
+                    ? {
+                        todayKey: usage.todayKey,
+                        todayCost: Number(usage.today.cost.toFixed(4)),
+                        todayCalls: usage.today.calls,
+                        todayInputTokens: usage.today.inputTokens,
+                        todayOutputTokens: usage.today.outputTokens,
+                        todayCacheReadTokens: usage.today.cacheReadTokens,
+                        totalCost: Number(usage.total.cost.toFixed(4)),
+                        totalCalls: usage.total.calls,
+                        dayCount: usage.dayCount,
+                        balance: usage.balance,
+                        currency: usage.currency,
+                      }
+                    : null,
                 })
               } catch (err) {
                 send(500, { error: (err && err.message) || String(err) })
