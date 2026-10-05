@@ -1383,7 +1383,16 @@ export function apply(ctx) {
             handler: async (req, res) => {
               const send = (code, body) => {
                 try {
-                  res.writeHead(code, { 'content-type': 'application/json' })
+                  res.writeHead(code, {
+                    'content-type': 'application/json',
+                    // ⚠️ 禁用缓存：卡片第一次请求时 contextAudit 可能还是 null
+                    // （早于首次 pre-step）。如果这个"不完整"的响应被浏览器缓存，
+                    // 之后每次请求（含点「刷新」）都会命中缓存拿到同一份旧数据
+                    // —— 表现为"刷新按钮毫无反应"。实测就是这个现象。
+                    'cache-control': 'no-store, no-cache, must-revalidate',
+                    pragma: 'no-cache',
+                    expires: '0',
+                  })
                   res.end(JSON.stringify(body))
                 } catch {
                   // 响应已发出，忽略

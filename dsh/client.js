@@ -43,7 +43,13 @@ window.__ModuleLoader__.load({
     /** 从 Host 侧拿运行时状态；失败时返回 null（卡片降级为只显示静态信息） */
     function fetchStatus() {
       // Host 半注册的状态路由（见 index.mjs 的 registerStatusRoute）
-      return fetch('/' + PKG + '/status', { headers: { accept: 'application/json' } })
+      // ⚠️ `cache: 'no-store'`：这是**实时状态**。第一次请求时 contextAudit
+      // 可能还是 null，若该响应被浏览器缓存，之后点「刷新」也只会拿到旧值
+      // （实测症状：刷新毫无反应）。Host 侧也设了 no-store 响应头，这里再加一道。
+      return fetch('/' + PKG + '/status', {
+        headers: { accept: 'application/json' },
+        cache: 'no-store',
+      })
         .then(function (res) {
           if (!res.ok) return null
           return res.json()
