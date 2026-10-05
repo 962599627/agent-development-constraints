@@ -92,12 +92,47 @@ function writeProbe(stage, extra) {
 const CONSTRAINTS_REL = join('agent-constraints', 'core', 'constraints.md')
 
 /**
- * 「每步注入」开关。
+ * 配置文件：`~/.dsh/agent-constraints.json`，形如 `{ "inject": true }`。
  *
- * 目前是常量 —— 卡片上的开关需要把设置持久化到 host 的 settings 服务，
- * 那部分还没做。先把真实值暴露给卡片显示，免得卡片显示一个不存在的东西。
+ * ## 为什么用文件而不是 host 的 settings 服务
+ *
+ * settings 服务要求 host 与 client 两侧注册同名 namespace、schema 保持一致、
+ * 并把 namespace 加进 proxy allowlist —— 链路长、出错点多。
+ * 而本插件已经因为"多一个依赖"崩过一次宿主会话了。
+ *
+ * 这里只需要表达一个布尔开关，一个 JSON 文件足够：
+ * 卡片通过状态路由读写它，host 侧每次 pre-step 读一次（文件很小）。
  */
-const INJECT_ENABLED = false
+const CONFIG_FILE = join(homedir(), '.dsh', 'agent-constraints.json')
+
+/** 默认：注入**开启**。每会话只多 41 tokens，换来"AI 不会忘记有约束" */
+const DEFAULT_CONFIG = { inject: true }
+
+function loadConfig() {
+  try {
+    if (!existsSync(CONFIG_FILE)) return Object.assign({}, DEFAULT_CONFIG)
+    const parsed = JSON.parse(readFileSync(CONFIG_FILE, 'utf8'))
+    return Object.assign({}, DEFAULT_CONFIG, parsed && typeof parsed === 'object' ? parsed : {})
+  } catch {
+    // 配置损坏时用默认值，绝不让它影响会话
+    return Object.assign({}, DEFAULT_CONFIG)
+  }
+}
+
+function saveConfig(patch) {
+  const next = Object.assign({}, loadConfig(), patch || {})
+  try {
+    writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2), 'utf8')
+    return next
+  } catch {
+    return null
+  }
+}
+
+/** 注入是否开启 */
+function configInjectEnabled() {
+  return loadConfig().inject !== false
+}
 
 /**
  * 最近一次 `agent/pre-step` 观察到的会话 cwd。
@@ -505,6 +540,57 @@ export function apply(ctx) {
         } catch {
           // 探针失败不影响返回值
         }
+
+        // ---------- 注入（受配置开关控制，每会话一次）----------
+        try {
+          if (configInjectEnabled()) {
+            const agent = payload && payload.agent
+            const canInject =
+              Boolean(agent) &&
+              !injectedAgents.has(agent) &&
+              decision &&
+              decision.kind === 'enter' &&
+              Array.isArray(decision.messages) &&
+              decision.messages.length > 0
+            if (canInject) {
+              const brief = buildBrief(getCwd(agent))
+              if (brief) {
+                // 用**真实的已有消息当模板**复制结构 —— 不猜字段。
+                //
+                // 这是本段最关键的设计：探针还没给出 UserMessage 的确切形状，
+                // 但 decision.messages[0] 本身就是一条真实的 UserMessage，
+                // 复制它比按文档拼一个更安全（上次崩就是因为拼得不完整）。
+                const tpl = decision.messages[0]
+                const injected = Object.assign({}, tpl)
+                if (Array.isArray(tpl.content) && tpl.content.length > 0) {
+                  injected.content = [
+                    Object.assign({}, tpl.content[0], { text: brief }),
+                  ]
+                } else {
+                  injected.content = [{ type: 'text', text: brief }]
+                }
+                // id 必须唯一，否则可能与已存在的消息冲突
+                if (typeof tpl.id === 'string') injected.id = tpl.id + ':constraints'
+                injectedAgents.add(agent)
+                writeProbe('inject-applied', {
+                  briefLength: brief.length,
+                  templateKeys: Object.keys(tpl),
+                  templateContentKeys:
+                    Array.isArray(tpl.content) && tpl.content[0]
+                      ? Object.keys(tpl.content[0])
+                      : null,
+                })
+                return Object.assign({}, decision, {
+                  messages: decision.messages.concat([injected]),
+                })
+              }
+            }
+          }
+        } catch (err) {
+          // 注入失败绝不影响会话：原样返回下游的 decision
+          writeProbe('inject-failed', { error: err && err.message })
+        }
+
         return decision
       })
       writeProbe('pre-step-listener-registered', { ok: true })
@@ -538,21 +624,61 @@ export function apply(ctx) {
                   // 响应已发出，忽略
                 }
               }
-              if (req.method !== 'GET') {
+
+              // 只接受 GET（读状态）与 POST（写配置）。
+              // ⚠️ 本路由只监听 loopback（host 自己起的 web server），
+              // 且只暴露"规则库路径/开关"这类非敏感信息，写操作也只改一个布尔。
+              if (req.method !== 'GET' && req.method !== 'POST') {
                 send(405, { error: 'method not allowed' })
                 return
               }
+
               try {
-                // cwd 优先用最近一次 pre-step 观察到的会话目录；
-                // 没有观测过（还没发过消息）时退回进程 cwd。
+                if (req.method === 'POST') {
+                  // 读请求体（体积很小，设个上限防意外）
+                  const chunks = []
+                  let size = 0
+                  for await (const chunk of req) {
+                    size += chunk.length
+                    if (size > 4096) {
+                      send(413, { error: 'body too large' })
+                      return
+                    }
+                    chunks.push(chunk)
+                  }
+                  let patch = {}
+                  if (chunks.length) {
+                    try {
+                      patch = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+                    } catch {
+                      send(400, { error: 'invalid json' })
+                      return
+                    }
+                  }
+                  // 只接受已知字段，且强制布尔 —— 不把任意对象写进配置文件
+                  const clean = {}
+                  if (patch && typeof patch.inject === 'boolean') clean.inject = patch.inject
+                  const saved = saveConfig(clean)
+                  if (!saved) {
+                    send(500, { error: 'failed to save config' })
+                    return
+                  }
+                  writeProbe('config-saved', { config: saved })
+                  send(200, { ok: true, config: saved })
+                  return
+                }
+
+                // GET：状态 + 当前配置
                 const cwd = lastObservedCwd || process.cwd()
                 const found = loadConstraints(cwd)
                 send(200, {
                   name: 'agent-development-constraints',
+                  version: '0.10.0',
                   constraintsPath: found ? found.path : null,
                   cwd,
                   cwdSource: lastObservedCwd ? 'session' : 'process',
-                  injectEnabled: INJECT_ENABLED,
+                  injectEnabled: configInjectEnabled(),
+                  configFile: CONFIG_FILE,
                   probeFile: join(homedir(), '.dsh', 'agent-constraints-probe.json'),
                 })
               } catch (err) {

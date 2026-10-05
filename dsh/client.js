@@ -37,11 +37,33 @@ window.__ModuleLoader__.load({
 
     /** 从 Host 侧拿运行时状态；失败时返回 null（卡片降级为只显示静态信息） */
     function fetchStatus() {
-      // Host 半注册的只读状态路由（见 index.mjs 的 registerStatusRoute）
+      // Host 半注册的状态路由（见 index.mjs 的 registerStatusRoute）
       return fetch('/' + PKG + '/status', { headers: { accept: 'application/json' } })
         .then(function (res) {
           if (!res.ok) return null
           return res.json()
+        })
+        .catch(function () {
+          return null
+        })
+    }
+
+    /**
+     * 写配置。
+     *
+     * Host 侧对请求体做了白名单：只接受 `{ inject: boolean }`，
+     * 其它字段一律忽略 —— 所以这里也不要发送多余的东西。
+     */
+    function saveConfig(patch) {
+      return fetch('/' + PKG + '/status', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(patch),
+      })
+        .then(function (res) {
+          return res.json().catch(function () {
+            return null
+          })
         })
         .catch(function () {
           return null
@@ -94,6 +116,9 @@ window.__ModuleLoader__.load({
         var errState = react.useState(null)
         var err = errState[0]
         var setErr = errState[1]
+        var busyState = react.useState(false)
+        var busy = busyState[0]
+        var setBusy = busyState[1]
 
         react.useEffect(function () {
           var alive = true
@@ -109,6 +134,25 @@ window.__ModuleLoader__.load({
             alive = false
           }
         }, [])
+
+        /** 切换注入开关；写成功后本地立即反映，不等重新拉取 */
+        function toggleInject(next) {
+          setBusy(true)
+          setErr(null)
+          saveConfig({ inject: next })
+            .then(function (r) {
+              if (!r || !r.ok) throw new Error((r && r.error) || '保存失败')
+              setStatus(function (prev) {
+                return Object.assign({}, prev, { injectEnabled: r.config.inject })
+              })
+            })
+            .catch(function (e) {
+              setErr(String((e && e.message) || e))
+            })
+            .then(function () {
+              setBusy(false)
+            })
+        }
 
         // Plugins 页会自己画标题和面包屑，并传 view: 'page' —— 那里只画表单。
         var isPage = props && props.view === 'page'
@@ -129,29 +173,81 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { key: 'desc', style: { color: palette.dim, fontSize: '12px', marginTop: '4px' } },
-            '把项目的开发约束规则库暴露给 AI：注册 constraints 工具，并在每一步之前注入 L0 铁律。'
+            '把项目的开发约束规则库暴露给 AI：注册 constraints 工具，并在会话开始时提醒一次。'
+          )
+        )
+
+        // ---------- 开关 ----------
+        var injectOn = Boolean(status && status.injectEnabled)
+        children.push(
+          h(
+            'label',
+            {
+              key: 'toggle',
+              style: {
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                marginTop: '12px',
+                cursor: busy || !status ? 'default' : 'pointer',
+                color: palette.text,
+                fontSize: '13px',
+              },
+            },
+            h('input', {
+              type: 'checkbox',
+              checked: injectOn,
+              disabled: busy || !status,
+              onChange: function (e) {
+                toggleInject(Boolean(e.target.checked))
+              },
+              style: { width: '15px', height: '15px', cursor: 'inherit' },
+            }),
+            '会话开始时提醒我查阅约束',
+            busy
+              ? h('span', { style: { color: palette.dim, fontSize: '12px' } }, '（保存中…）')
+              : null
           )
         )
 
         children.push(
           h(
             'div',
+            { key: 'hint', style: { color: palette.dim, fontSize: '11.5px', marginTop: '4px' } },
+            '每个会话只提醒一次，约 41 tokens。关闭后只保留 constraints 工具（按需调用，零常驻成本）。'
+          )
+        )
+
+        // ---------- 状态 ----------
+        children.push(
+          h(
+            'div',
             {
               key: 'body',
               style: {
-                marginTop: '10px',
+                marginTop: '12px',
                 padding: '10px 12px',
                 border: '1px solid ' + palette.border,
                 borderRadius: '10px',
                 background: palette.bg,
               },
             },
-            row('插件版本', VERSION),
-            row('规则库位置', status && status.constraintsPath ? status.constraintsPath : '未检测到'),
-            row('会话目录', status && status.cwd ? status.cwd : '（等待宿主上报）'),
-            row('每步注入', status ? (status.injectEnabled ? '已启用' : '已关闭') : '（等待宿主上报）'),
-            status && status.probeFile ? row('诊断文件', status.probeFile) : null,
-            err ? row('状态读取失败', err) : null
+            row(
+              '规则库位置',
+              status && status.constraintsPath
+                ? status.constraintsPath
+                : '未检测到（本会话目录下没有 agent-constraints/）'
+            ),
+            row(
+              '会话目录',
+              status && status.cwd
+                ? status.cwd +
+                    (status.cwdSource === 'process' ? '（进程 cwd，尚未收到会话消息）' : '')
+                : '（等待宿主上报）'
+            ),
+            row('插件版本', (status && status.version) || VERSION),
+            status && status.configFile ? row('配置文件', status.configFile) : null,
+            err ? row('出错', err) : null
           )
         )
 
