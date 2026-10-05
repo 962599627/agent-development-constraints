@@ -295,7 +295,47 @@ function analyzeSession(exec) {
       }
     }
     if (!events) {
-      return { error: '读不到 session 事件列表', sessionKeys: Object.keys(session) }
+      // 诊断：把每个候选的真实类型报出来，而不是只说"读不到"。
+      // （C-012：给数据打报告，不要凭印象。）
+      const shape = (v) => {
+        if (v === null) return 'null'
+        if (Array.isArray(v)) return 'array(' + v.length + ')'
+        return typeof v
+      }
+      let logShape = 'n/a'
+      let logKeys = null
+      try {
+        if (session.log) {
+          logKeys = Object.keys(session.log)
+          logShape =
+            'Object{ log.events=' +
+            shape(session.log.events) +
+            ', log.length=' +
+            shape(session.log.length) +
+            ' }'
+        }
+      } catch {
+        logShape = '读取 session.log 时抛错'
+      }
+      return {
+        error: '读不到 session 事件列表',
+        诊断: {
+          eventsSnapshot: shape(session.eventsSnapshot),
+          eventsSnapshotKeys:
+            session.eventsSnapshot &&
+            typeof session.eventsSnapshot === 'object' &&
+            !Array.isArray(session.eventsSnapshot)
+              ? Object.keys(session.eventsSnapshot)
+              : null,
+          log: logShape,
+          logKeys,
+          derivedNodes: shape(session.derivedNodes),
+          toolHistoryProjection: shape(session.toolHistoryProjection),
+          firstLiveSeq: shape(session.firstLiveSeq),
+          inheritedEventCount: shape(session.inheritedEventCount),
+        },
+        sessionKeys: Object.keys(session),
+      }
     }
 
     const counts = {
