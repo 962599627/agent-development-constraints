@@ -163,7 +163,7 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** 把卡片挂到两个可能的 slot 上（新旧主机各有一个） */
+    /** 把卡片挂到各个 slot 上 */
     function mountCard(scope) {
       var react
       try {
@@ -175,30 +175,51 @@ window.__ModuleLoader__.load({
 
       var Card = makeCard(react)
 
-      // slot 注册用 generator + yield：slots.inject 等待 slot 被声明，
+      // 用 generator + yield 注册：slots.inject 等待 slot 被声明，
       // 所以每个主机在它自己的设置界面里挂载这张卡片。
-      // 照抄 modlens 的写法 —— 这是唯一经过验证的形式。
-      try {
-        scope.slots.inject('plugins.bundle.config', function* () {
-          yield scope.slots.register(
-            { name: 'plugins.bundle.config', key: PKG },
-            Card
-          )
-        })
-      } catch (error) {
-        console.error('[agent-constraints] plugins.bundle.config 注册失败: ' + error)
+      // 照抄已装插件的写法 —— 这是唯一经过验证的形式。
+      function registerTo(slotName, descriptor) {
+        try {
+          scope.slots.inject(slotName, function* () {
+            yield scope.slots.register(descriptor, Card)
+          })
+        } catch (error) {
+          console.error('[agent-constraints] slot ' + slotName + ' 注册失败: ' + error)
+        }
       }
 
-      try {
-        scope.slots.inject('settings.plugin.item', function* () {
-          yield scope.slots.register(
-            { name: 'settings.plugin.item', id: PKG, key: PKG, order: 40 },
-            Card
-          )
-        })
-      } catch (error) {
-        console.error('[agent-constraints] settings.plugin.item 注册失败: ' + error)
-      }
+      // ---------- 主入口：设置页左侧的独立条目 ----------
+      //
+      // slot 名 `settings.section`，字段照 @linxin666/dsh-web-all 的两处用法
+      // （lib/client.js:788 与 :4082）：{ name, id, order, label, locale?, children? }
+      //
+      // ⚠️ 这里**故意不传 locale** —— 传了就要在 host 侧注册对应的本地化字典；
+      // 而 label 是函数、可以直接返回字符串，少一个依赖少一个坑。
+      // （本插件已经因为"多一个依赖"崩过一次宿主会话。）
+      registerTo('settings.section', {
+        name: 'settings.section',
+        id: PKG,
+        order: 200,
+        label: function () {
+          return '开发约束'
+        },
+      })
+
+      // ---------- 兼容：0.1.7+ 的 Plugins 页 ----------
+      // 有些主机把插件配置收进 Plugins 页（modlens 就挂那里）。
+      // 两个都挂，交给主机决定在哪里展示。
+      registerTo('plugins.bundle.config', {
+        name: 'plugins.bundle.config',
+        key: PKG,
+      })
+
+      // ---------- 兼容：更老的 settings.plugin.item ----------
+      registerTo('settings.plugin.item', {
+        name: 'settings.plugin.item',
+        id: PKG,
+        key: PKG,
+        order: 40,
+      })
     }
 
     function registerCard(ctx) {
