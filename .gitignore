@@ -7,3 +7,6 @@ node_modules/
 _cm.txt
 _tmp_*
 *.tmp
+
+# npm pack 产物（发布用，不进仓库）
+*.tgz
