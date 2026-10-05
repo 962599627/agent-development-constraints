@@ -8,6 +8,26 @@
 
 ---
 
+## [0.26.6] - 2026-10-05
+
+### 脚本把 CHANGELOG 写成 0 字节
+
+**原因**：用 PowerShell 给 CHANGELOG 插条目时，
+`[System.IO.File]::ReadAllText("CHANGELOG.md")` 按**进程 CWD**
+（不是 PowerShell 的 `cd` 位置）解析相对路径而抛异常，变量为 null；
+而 PowerShell 对非终止性错误**继续执行后续语句**。
+
+**问题**：随后的 `WriteAllText($null)` 把 **654 行的 CHANGELOG 覆盖为 0 字节**。
+靠 `git checkout -- CHANGELOG.md` 恢复（内容已提交，无实际损失）。
+
+**解决方法**：
+- 新增规则 **R-017**（用变量"读 → 改 → 写回"文件前必须确认非空），
+  并在「构建 / 命令 / 环境」症状表中加入「文件被写空 / 内容丢失」
+- 教训一并写入规则：PowerShell 里给 .NET API 传路径**一律用绝对路径**
+  （`cd` 不改 `[System.IO.*]` 的当前目录）；这类破坏**不受文件版本守卫保护**
+
+---
+
 ## [0.26.5] - 2026-10-05
 
 ### hooks 命令是「假安装」：装了钩子却不装检查脚本

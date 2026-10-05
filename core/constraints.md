@@ -245,6 +245,26 @@
 
 ---
 
+### R-017 用变量“读 → 改 → 写回”文件前，必须确认变量非空
+- **规则**：任何“读入 → 处理 → 写回”的脚本，写之前必须校验内容非空
+  （或先写临时文件再原子替换）。**读取失败时变量通常是空值，
+  而很多宿主不会因此终止**，于是把空内容写回，**原文件被清空**。
+- **触发**：用脚本批量改文件；用 `WriteAllText` / `write_text` / 重定向覆盖已有文件
+- **检查**：读取之后有没有判空；写之前有没有断言长度；有没有 `.bak` / git 兜底
+- **证据**：2026-10-05 给 CHANGELOG 插条目时，`[System.IO.File]::ReadAllText("CHANGELOG.md")`
+  因**相对路径解析到进程 CWD**（PowerShell 的 `cd` 不会改 .NET 的当前目录）而招异常，
+  `$cl` 为 null；但 PowerShell 对非终止性错误**继续往下执行**，
+  随后的 `WriteAllText($null)` 把 **654 行的 CHANGELOG 写成 0 字节**。
+  靠 `git checkout -- CHANGELOG.md` 恢复（内容已提交，无损失）。
+- **配套教训**：
+  - PowerShell 里给 .NET API 传路径**一律用绝对路径** —— `cd` 只改 PowerShell 的位置，
+    不改 `[System.IO.*]` / `[IO.File]` 的当前目录
+  - 这类破坏**不会被文件版本守卫拦住**（脚本/外部程序不受保护），只能靠自己判空
+- **同族**：R-002（一旦写进去就永久留下）—— R-002 讲“提交后无法挽回”，
+  本条规定“**别把文件写没**”。
+
+---
+
 ## L1 · 协作约定
 
 > 人和 AI、AI 和 AI 之间的协作规则。违反不致命，但会显著降低效率。
@@ -517,6 +537,7 @@
 | `Failed to connect ... port 443` 但 `curl` 能通 | git 在 HTTP/2 上挂起 | [`stacks/git.md`](stacks/git.md) |
 | 退出码 1，但命令实际成功了 | PowerShell 把 stderr 当错误 | [`stacks/shell.md`](stacks/shell.md) |
 | 脚本报语法错误 + 中文乱码（`鏅鸿兘`） | `.ps1` 缺 UTF-8 BOM | [`stacks/shell.md`](stacks/shell.md) |
+| **文件被写空 / 内容丢失** | 脚本“读→改→写回”时读取失败得到空值，而宿主不会终止 | **R-017** |
 | 字符串少了字符（开头被吞） | 双引号里反引号是转义符 | [`stacks/shell.md`](stacks/shell.md) |
 | `bad interpreter` / `$'\r': command not found` | `.sh` 是 CRLF 行尾 | [`stacks/shell.md`](stacks/shell.md) |
 | `git add` **整体失败**、报某文件无法索引 | Windows 保留名文件（`nul` 等） | [`stacks/git.md`](stacks/git.md) |
