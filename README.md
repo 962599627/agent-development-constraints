@@ -140,6 +140,10 @@ are holding an **error message**, not the name of the language you're writing:
 | **No "Edit" button on your own profile** | Identity check using a mutable display name | **R-004** |
 | Clicking an inline button **navigates the row** | `<a>` wrapping a `<button>` (invalid HTML) | **R-005** |
 | **Two numbers disagree** | Missing consistency assertion | **R-011** |
+| **The whole suite is absurdly slow** (tens of seconds) | Fixtures doing production-grade hashing/crypto; frameworks don't downgrade it for you | **R-013** |
+| **A scan reports "0 issues" but there are some** | False negative in the scanner itself | **R-014** |
+| **Nothing happens and no error either** | The code never ran (e.g. function ref missing the colon) | **R-015** |
+| `Maximum recursive updates exceeded` | Writing reactive state inside a render/callback without a "same value → return" guard | **R-015** |
 
 Four groups: build/CLI/environment · testing · API/data/security · UI/interaction.
 
