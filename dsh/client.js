@@ -138,6 +138,10 @@ window.__ModuleLoader__.load({
         var diagState = react.useState(null)
         var diag = diagState[0]
         var setDiag = diagState[1]
+        // 技术细节默认折叠 —— 平时只说人话，排查时才展开
+        var showDiagState = react.useState(false)
+        var showDiag = showDiagState[0]
+        var setShowDiag = showDiagState[1]
 
         /**
          * 拉状态，并在**数据还不完整时持续重试**。
@@ -356,36 +360,103 @@ window.__ModuleLoader__.load({
           )
         )
 
-        // ---------- 诊断行 ----------
-        // 只在数据不完整时显示：把"卡片实际拿到了什么"摆出来。
-        // 数据齐全时自动消失，不干扰正常使用。
+        // ---------- 等待态 / 诊断 ----------
+        // 「数据不完整」有两种完全不同的含义，而用户看不出区别：
+        //   ① 正常：本会话还没发出第一条消息，host 那边还没有会话上下文
+        //   ② 异常：请求失败 / 一直拿不到数据
+        // 之前这里只显示一段技术诊断，导致 ① 看起来像 bug（实测困惑过）。
+        // 现在：默认只说人话，技术细节折叠在「技术诊断」里，点开才看。
         var incomplete = !status || !status.contextAudit || status.cwdSource !== 'session'
-        if (diag && incomplete) {
+        if (incomplete) {
+          var stuck = diag && !diag.null && (diag.tries || 0) > 12
           children.push(
             h(
               'div',
               {
-                key: 'diag',
+                key: 'waiting',
                 style: {
-                  marginTop: '8px',
-                  padding: '8px 10px',
-                  border: '1px dashed ' + palette.border,
-                  borderRadius: '8px',
+                  marginTop: '10px',
+                  padding: '10px 12px',
+                  border: '1px solid ' + palette.border,
+                  borderRadius: '10px',
+                  background: palette.bg,
                   color: palette.dim,
-                  fontSize: '11px',
-                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                  lineHeight: '1.6',
+                  fontSize: '12px',
+                  lineHeight: '1.7',
                 },
               },
-              '诊断（数据未完整，此处显示卡片实际拿到的原始值）',
-              h('br'),
-              '拉取于 ' + diag.at + '　version=' + diag.version + '　第 ' + (diag.tries || 0) + ' 次重试',
-              h('br'),
-              'cwd=' + (diag.cwd || 'null') + '　cwdSource=' + (diag.cwdSource || 'null'),
-              h('br'),
-              'hasAudit=' + diag.hasAudit + '　status=' + (diag.null ? 'null' : 'ok'),
-              h('br'),
-              '（数据齐备前会持续重试；也可点「刷新」。第一条消息发出后数秒内应自动补齐）'
+              h(
+                'div',
+                { style: { color: palette.text, marginBottom: '2px' } },
+                diag && diag.null
+                  ? '⚠️ 读不到宿主状态'
+                  : stuck
+                    ? '⚠️ 长时间未取到会话数据'
+                    : '⏳ 等待本会话的第一条消息…'
+              ),
+              h(
+                'div',
+                null,
+                diag && diag.null
+                  ? '请求返回了空。点「刷新」重试；若持续如此，可能是宿主插件未正确加载。'
+                  : stuck
+                    ? '已重试多次仍未取到。点「刷新」；仍不行请查看下方技术诊断。'
+                    : '占用数据在会话开始后自动补齐 —— 发出第一条消息几秒内即可看到，无需额外操作。'
+              ),
+              diag
+                ? h(
+                    'div',
+                    { style: { marginTop: '4px', fontSize: '11px' } },
+                    '已重试 ' +
+                      (diag.tries || 0) +
+                      ' 次　·　最近一次 ' +
+                      diag.at +
+                      '　·　'
+                  )
+                : null,
+              h(
+                'button',
+                {
+                  key: 'diagToggle',
+                  type: 'button',
+                  onClick: function () {
+                    setShowDiag(function (v) {
+                      return !v
+                    })
+                  },
+                  style: {
+                    marginTop: diag ? '0' : '4px',
+                    padding: '1px 8px',
+                    fontSize: '11px',
+                    color: palette.dim,
+                    background: 'transparent',
+                    border: '1px solid ' + palette.border,
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                  },
+                },
+                showDiag ? '收起技术诊断' : '技术诊断'
+              ),
+              showDiag && diag
+                ? h(
+                    'div',
+                    {
+                      style: {
+                        marginTop: '8px',
+                        paddingTop: '8px',
+                        borderTop: '1px dashed ' + palette.border,
+                        fontSize: '11px',
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                        lineHeight: '1.6',
+                      },
+                    },
+                    'version=' + diag.version + '　status=' + (diag.null ? 'null' : 'ok'),
+                    h('br'),
+                    'cwd=' + (diag.cwd || 'null'),
+                    h('br'),
+                    'cwdSource=' + (diag.cwdSource || 'null') + '　hasAudit=' + diag.hasAudit
+                  )
+                : null
             )
           )
         }
