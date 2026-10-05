@@ -151,7 +151,30 @@ are holding an **error message**, not the name of the language you're writing:
 | **Nothing happens and no error either** | The code never ran (e.g. function ref missing the colon) | **R-015** |
 | `Maximum recursive updates exceeded` | Writing reactive state inside a render/callback without a "same value → return" guard | **R-015** |
 
-Four groups: build/CLI/environment · testing · API/data/security · UI/interaction.
+## Symptom lookup: the book's table of contents
+
+The library is not just a list of rules — it opens with a **symptom index**.
+When something breaks you are holding a *symptom* (an error message, a weird
+behaviour), not the name of a language; so locate by symptom first, then read
+the entry.
+
+```bash
+constraints action=symptom                     # full index (category + symptom + rule id)
+constraints action=symptom q="suite is slow"   # match -> the entry + the full rule text
+constraints action=l0                          # iron rules
+constraints action=show                        # everything
+```
+
+Currently **10 groups**: build/CLI/environment · testing · scanners/audits ·
+after changing a data source · API/data/security · UI/interaction ·
+plugin/host integration · cost/troubleshooting · multi-copy drift · empty/waiting/failure.
+
+> ⚠️ **Index entries must be written the way the reader describes the problem.**
+> The first version split on words and matched substrings; it missed badly —
+> the table said "nothing happens, and no error either" while the user typed
+> "nothing happens and no error" (one comma apart) and got no hit.
+> Now it uses **character-bigram overlap** (Chinese has no word boundaries),
+> and "a paraphrase must still match" is locked in as a test.
 
 ---
 

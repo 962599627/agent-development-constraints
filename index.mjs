@@ -843,7 +843,184 @@ function extractIronRules(text) {
   return rules
 }
 
-/** 未安装时的提示：可操作，而不是报错 */
+/**
+ * 从规则库里抽出「按症状查」目录 —— **这是这本书的目录**。
+ *
+ * 为什么要有它：用户的原话是
+ *   "我想要的是我有一本书解决问题的书 我看到了目录 快速找到问题"。
+ *
+ * 光有规则正文不够：出问题时手上拿的是**症状**（报错原文、异常现象），
+ * 不是"我在写哪个语言"。所以这本书前面必须有一张**按症状查的目录**，
+ * 而且要能**搜** —— 目录只是入口，命中后要直接给出对应规则全文。
+ *
+ * 结构（见 core/constraints.md 的 `## 快速定位 · 按症状查`）：
+ *   ### 测试
+ *   | 症状 | 很可能的原因 | 详见 |
+ *   |---|---|---|
+ *   | **整套测试慢得离谱** | 夹具在做生产级哈希 | **R-013** |
+ *
+ * 返回 [{ category, symptom, cause, ref, refIds }]
+ */
+function extractSymptomIndex(text) {
+  const rows = []
+  try {
+    const lines = String(text).split(/\r?\n/)
+    let inSection = false
+    let category = ''
+    for (const line of lines) {
+      // 进入「快速定位」段；遇到下一个二级标题就结束
+      if (/^##\s+快速定位/.test(line)) {
+        inSection = true
+        continue
+      }
+      if (inSection && /^##\s+/.test(line)) break
+      if (!inSection) continue
+
+      const h = /^###\s+(.+?)\s*$/.exec(line)
+      if (h) {
+        category = h[1]
+        continue
+      }
+      if (!line.startsWith('|')) continue
+      const cells = line
+        .split('|')
+        .slice(1, -1)
+        .map((c) => c.trim())
+      if (cells.length < 3) continue
+      // 跳过表头与分隔行
+      if (/^症状$/.test(cells[0]) || /^-{2,}$/.test(cells[0])) continue
+      // 去掉 markdown 强调符，保留可读文本。
+      // ⚠️ 用 \u0060 表示反引号 —— **正则字面量里不要出现引号或反引号**：
+      //    仓库的括号配平检查器不认识正则，会把它们当成字符串起始，
+      //    从而把中间所有括号跳过、误报"括号不配平"（实测踩过两次）。
+      const clean = (s) => s.replace(/[*\u0060]/g, '').trim()
+      const ref = clean(cells[2])
+      const refIds = ref.match(/[RC]-\d+/g) || []
+      rows.push({
+        category,
+        symptom: clean(cells[0]),
+        cause: clean(cells[1]),
+        ref,
+        refIds,
+      })
+    }
+  } catch {
+    // 解析失败返回已收集的部分
+  }
+  return rows
+}
+
+/**
+ * 症状检索的打分器。
+ *
+ * ## 为什么不能按"词"匹配（实测教训）
+ *
+ * 第一版按空格切词 + `includes` 子串匹配，结果大量漏命中：
+ *
+ *   q="没反应也不报错"  → 无命中（表里写的是「没反应、也不报错」，差一个顿号）
+ *   q="扫描报0"        → 无命中（表里是「扫描报告"0 处问题"，但实际有」）
+ *   q="未登录返回email" → 无命中（表里是「未登录接口返回 email / username」）
+ *
+ * **中文没有词边界**，读者也不会用表里的原话去查 —— 这正是"书的索引"的难点。
+ * 所以改成**字符二元组（bigram）重合度**：忽略标点、按 2 字滑窗比较，
+ * 只要大意对上就能命中，同时用"完整包含"给高分。
+ */
+function symptomScore(row, query) {
+  // ⚠️ 只保留**字母与数字**，其余（空格/顿号/引号/反引号/标点）全部丢掉。
+  //
+  // 这样写有两个好处：
+  //   1. 中文没有词边界 —— 去掉标点后按 2 字滑窗比较，"没反应也不报错"
+  //      与表里的"没反应、也不报错"就能对上（只差一个顿号）。
+  //   2. **正则里不出现引号与反引号** —— 仓库的括号配平检查器
+  //      （tests/plugin.spec.mjs 的【防线】）不认识正则字面量，
+  //      会把引号当成字符串起始，从而误报括号不配平。
+  const norm = (s) => String(s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+  const q = norm(query)
+  if (!q) return 0
+  const symptom = norm(row.symptom)
+  const hay = norm(`${row.symptom} ${row.cause} ${row.ref} ${row.category}`)
+
+  // 完整包含：最强信号
+  if (symptom.includes(q)) return 100
+  if (hay.includes(q)) return 60
+
+  const bigrams = (s) => {
+    const set = new Set()
+    for (let i = 0; i < s.length - 1; i++) set.add(s.slice(i, i + 2))
+    return set
+  }
+  const qb = bigrams(q)
+  if (!qb.size) return symptom.includes(q) ? 50 : 0
+  const sb = bigrams(symptom)
+  if (!sb.size) return 0
+  let hit = 0
+  for (const g of qb) if (sb.has(g)) hit++
+  const ratio = hit / qb.size
+  // 只认"过半相近"，否则会把不相关条目也捞出来
+  if (ratio < 0.5) return 0
+  return Math.round(ratio * 40)
+}
+
+/**
+ * 按 ID 取出规则的**全文**（含"规则 / 触发 / 检查 / 证据"四要素）。
+ *
+ * 目录命中之后要把这条给出来 —— 用户要的是"快速找到问题"，
+ * 只给一个编号等于把人又踢回书里翻。
+ */
+function extractRulesById(text, ids) {
+  const want = new Set(ids)
+  const out = []
+  if (!want.size) return out
+  try {
+    const lines = String(text).split(/\r?\n/)
+    let current = null
+    let buf = []
+    const flush = () => {
+      if (current && want.has(current.id)) {
+        out.push({ id: current.id, title: current.title, body: buf.join('\n').trim() })
+      }
+      buf = []
+    }
+    for (const line of lines) {
+      const m = /^###\s+([RC]-\d+)\s+(.+?)\s*$/.exec(line)
+      if (m) {
+        flush()
+        current = { id: m[1], title: m[2] }
+        continue
+      }
+      if (current) buf.push(line)
+    }
+    flush()
+  } catch {
+    // 忽略
+  }
+  // 按请求顺序返回，保持稳定
+  return ids.map((id) => out.find((r) => r.id === id)).filter(Boolean)
+}
+
+/**
+ * 把目录渲染成**紧凑的一段**（注入用）。
+ *
+ * ⚠️ 实测教训：第一版把**全部症状**都写进去，结果 1261 字符 ≈ **788 tokens** ——
+ * 比之前被否掉的那版（280 tokens）还贵一倍多。注入的消息会进 session 历史，
+ * 之后每轮重发，这个体积不可接受。
+ *
+ * 所以注入的是**章级目录**（分类 + 条目数），细目按需查：
+ *   · `action=symptom`（不带 q）→ 完整目录
+ *   · `action=symptom q="症状"` → 命中条目 + 规则全文
+ */
+function buildSymptomBrief(rows) {
+  if (!rows.length) return ''
+  const byCategory = new Map()
+  for (const r of rows) {
+    byCategory.set(r.category, (byCategory.get(r.category) || 0) + 1)
+  }
+  return [...byCategory].map(([cat, n]) => `· ${cat}（${n}）`).join('\n')
+}
+
+/**
+ * 未安装时的提示：可操作，而不是报错
+ */
 function notInstalledMessage(cwd) {
   return (
     'constraints: 当前项目没有安装 agent-constraints（已从 ' +
@@ -869,24 +1046,38 @@ function notInstalledMessage(cwd) {
 const injectedAgents = new WeakSet()
 
 /**
- * 生成注入的提醒 —— **一句话，只为把 AI 引到工具上**。
+ * 生成注入的提醒 —— **这本书的目录**。
  *
- * ## 为什么刻意不列 L0 条目
+ * ## 设计取向的两次修正（都是用户推出来的）
  *
- * 早先的实现会列全部 12 条铁律标题（约 280 tokens）。看起来很"贴心"，
- * 实际是把成本埋进了历史里：
- *   - 一条 280 tokens 的消息进历史 → 之后**每一轮**都要重发
- *   - 若每步注入，还要乘以步数
+ * 1. **最早**：列出全部 L0 铁律标题（约 280 tokens）。
+ *    问题：那是一堆**规则**，不是**目录** —— 出问题时手上拿的是症状，
+ *    从"规则标题"反推"这跟我现在的问题有关吗"很费劲。
  *
- * 而 `constraints` 工具**随时可调用**，`l0` 按需取即可。
- * 两者的信息完全等价，但按需取是**零常驻成本**。
+ * 2. **后来**：压缩成一句话"请调用 constraints 工具"（约 35 tokens）。
+ *    问题：**AI 根本不会去调**。实测一整个任务下来，直到用户提醒才第一次调用，
+ *    期间把规则库早就写着的 C-005（面向人的命令不要有长等待循环）
+ *    踩了整整一轮 —— 150 秒的全量测试反复跑。
  *
- * 现在这句话约 35 tokens，且每个会话只发一次。
+ * 3. **现在**：注入**按症状查的目录**（分类 + 症状关键词）+ 一句检索提示。
+ *    用户的原话："我想要的是我有一本书解决问题的书 我看到了目录 快速找到问题"。
+ *
+ * 所以这里注入的不是"规则清单"，而是**目录**；命中之后由
+ * `constraints action=symptom q="症状"` 直接把对应规则**全文**取回来。
+ *
+ * ⚠️ 成本：仍然**每个会话只注入一次**（见 injectedAgents），
+ * 并且目录只写症状关键词 —— 原因和编号按需查。
  */
 function buildBrief(cwd) {
   const found = loadConstraints(cwd)
   if (!found) return null
-  return '【开发约束】本项目装有 agent-constraints 规则库。动手前请先调用 constraints 工具查阅 L0 铁律。'
+  const index = extractSymptomIndex(found.text)
+  const toc = buildSymptomBrief(index)
+  const head = '【开发约束 · 目录】出问题先按症状定位，别硬猜：'
+  const hint =
+    '用法：constraints action=symptom q="你的症状"（返回命中的条目 + 对应规则全文）；' +
+    'constraints action=l0 取铁律；action=show 取全部规则。'
+  return toc ? `${head}\n${toc}\n${hint}` : `${head}${hint}`
 }
 
 /**
@@ -903,15 +1094,21 @@ function buildConstraintsTool() {
     // 所以写得尽量短，只保留"什么时候该用"和动作清单。
     description:
       '查看本项目的开发约束规则库（agent-constraints）。' +
-      'action: show=全部规则 / l0=仅铁律 / path=规则库位置 / where=解析诊断。' +
+      '出问题时先用 action=symptom & q="症状" 按症状目录定位并取回对应规则全文；' +
+      'show=全部规则 / l0=仅铁律 / path=规则库位置 / where=解析诊断。' +
       '动手前、或不确定本项目有哪些约定时先调用。',
     parameters: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['show', 'l0', 'path', 'where'],
-          description: 'show|l0|path|where',
+          enum: ['symptom', 'show', 'l0', 'path', 'where'],
+          description: 'symptom=按症状查目录（推荐）；show|l0|path|where',
+        },
+        q: {
+          type: 'string',
+          description:
+            'action=symptom 时的症状关键词（如"整套测试很慢"、"没反应也不报错"）；留空则返回整个目录',
         },
       },
       required: ['action'],
@@ -930,6 +1127,69 @@ function buildConstraintsTool() {
       const found = loadConstraints(cwd)
 
       switch (action) {
+        case 'symptom': {
+          if (!found) return notInstalledMessage(cwd)
+          const index = extractSymptomIndex(found.text)
+          if (!index.length) {
+            return 'constraints: 规则库里没有「快速定位 · 按症状查」目录段。'
+          }
+          const q = String(args.q ?? args.query ?? '').trim()
+
+          // 无关键词：返回整个目录（分类 + 症状 + 编号）
+          if (!q) {
+            const byCategory = new Map()
+            for (const r of index) {
+              if (!byCategory.has(r.category)) byCategory.set(r.category, [])
+              byCategory.get(r.category).push(r)
+            }
+            const out = ['目录（按症状查）—— 用 action=symptom q="症状" 取详情：']
+            for (const [cat, rows] of byCategory) {
+              out.push(`\n【${cat}】`)
+              for (const r of rows) {
+                out.push(`  · ${r.symptom}  →  ${r.ref}`)
+              }
+            }
+            return out.join('\n')
+          }
+
+          // 关键词切分：先整句试（中文无词边界），再把空格分隔的片段各自试
+          const terms = [q, ...q.split(/\s+/).filter(Boolean)]
+          const scored = index
+            .map((r) => {
+              let score = 0
+              for (const t of terms) score = Math.max(score, symptomScore(r, t))
+              return { r, score }
+            })
+            .filter((x) => x.score > 0)
+            .sort((a, b) => b.score - a.score)
+
+          if (!scored.length) {
+            const cats = [...new Set(index.map((r) => r.category))]
+            return (
+              `constraints: 目录里没有匹配 ${JSON.stringify(q)} 的条目。\n` +
+              `可用分类：${cats.join(' · ')}\n` +
+              '换个说法再试，或 action=symptom（不带 q）看完整目录。'
+            )
+          }
+
+          const top = scored.slice(0, 5).map((x) => x.r)
+          const ids = [...new Set(top.flatMap((r) => r.refIds))]
+          const bodies = extractRulesById(found.text, ids)
+
+          const out = [`按症状查：${q}`]
+          for (const r of top) {
+            out.push(`\n· 【${r.category}】${r.symptom}`)
+            out.push(`  很可能的原因：${r.cause}`)
+            out.push(`  详见：${r.ref}`)
+          }
+          if (bodies.length) {
+            out.push('\n──────── 命中规则全文 ────────')
+            for (const b of bodies) {
+              out.push(`\n### ${b.id} ${b.title}\n${b.body}`)
+            }
+          }
+          return out.join('\n')
+        }
         case 'where':
           return JSON.stringify(
             {
@@ -956,7 +1216,7 @@ function buildConstraintsTool() {
           return found.text
         default:
           throw new Error(
-            `constraints: unknown action ${JSON.stringify(action)}（可用：show / l0 / path / where）`
+            `constraints: unknown action ${JSON.stringify(action)}（可用：symptom / show / l0 / path / where）`
           )
       }
     },
