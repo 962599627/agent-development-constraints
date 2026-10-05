@@ -250,9 +250,157 @@ function auditToolSchemas(exec) {
       totalChars,
       totalApproxTokens: Math.round(totalChars / 3.5),
       top: rows.slice(0, 10),
+      // 完整排名留给内部逻辑（suggestDisable）用，不直接输出
+      all: rows,
     }
   } catch (err) {
     return { error: (err && err.message) || String(err) }
+  }
+}
+
+/**
+ * 分析当前会话：事件构成 + **哪些工具真的被调用过**。
+ *
+ * ## 为什么"谁用过"比"谁大"更有用
+ *
+ * `audit` 只回答"谁占地方"。真正能指导决策的是
+ * "**谁占了地方却从没用过**" —— 那才是可以关掉的。
+ *
+ * 所以这里从 session 的事件里数 `tool/call`，得到每个工具的**真实使用次数**。
+ *
+ * ⚠️ session 的内部结构可能随版本变化，所以每个字段都防御式读取；
+ * 拿不到就返回 error 说明，而不是抛错。
+ */
+function analyzeSession(exec) {
+  try {
+    const session = exec && exec.agent && exec.agent.session
+    if (!session) return { error: '拿不到 session 对象' }
+
+    // 事件列表：不同版本可能挂在不同字段上，逐个尝试
+    let events = null
+    const candidates = [
+      () => session.eventsSnapshot,
+      () => session.log && session.log.events,
+      () => (typeof session.events === 'function' ? session.events() : session.events),
+    ]
+    for (const get of candidates) {
+      try {
+        const v = get()
+        if (Array.isArray(v) && v.length) {
+          events = v
+          break
+        }
+      } catch {
+        // 试下一个
+      }
+    }
+    if (!events) {
+      return { error: '读不到 session 事件列表', sessionKeys: Object.keys(session) }
+    }
+
+    const counts = {
+      turn: 0,
+      step: 0,
+      userMessage: 0,
+      assistantMessage: 0,
+      toolCall: 0,
+      toolResult: 0,
+    }
+    const toolUsage = {}
+    for (const ev of events) {
+      const t = ev && ev.type
+      if (t === 'turn/start') counts.turn++
+      else if (t === 'step/start') counts.step++
+      else if (t === 'user/message') counts.userMessage++
+      else if (t === 'assistant/message') counts.assistantMessage++
+      else if (t === 'tool/call') {
+        counts.toolCall++
+        const nm = ev.data && ev.data.name ? ev.data.name : '(unknown)'
+        toolUsage[nm] = (toolUsage[nm] || 0) + 1
+      } else if (t === 'tool/result') counts.toolResult++
+    }
+
+    const usageRows = Object.keys(toolUsage)
+      .map((name) => ({ name, calls: toolUsage[name] }))
+      .sort((a, b) => b.calls - a.calls)
+
+    return {
+      eventCount: events.length,
+      事件构成: counts,
+      工具调用: {
+        总计: counts.toolCall,
+        不同工具数: usageRows.length,
+        排名: usageRows,
+      },
+    }
+  } catch (err) {
+    return { error: (err && err.message) || String(err) }
+  }
+}
+
+/**
+ * 综合"占用"与"使用"，给出**建议关闭清单**。
+ *
+ * 判断依据（两条都要满足）：
+ *   1. 这个工具的 schema 明显占地方（默认 >= 200 tokens）
+ *   2. 它在本会话里**一次都没被调用过**
+ *
+ * 满足两条的才是明确候选 —— **占了地方却什么都没干**的工具。
+ * 只看大小会误伤"体积大但天天用"的（比如 read / bash）。
+ */
+function suggestDisable(exec, minTokens = 200) {
+  const audit = auditToolSchemas(exec)
+  if (audit.error) return { error: audit.error }
+
+  const sess = analyzeSession(exec)
+  if (sess.error) {
+    return {
+      说明: '能算出占用，但读不到本会话的工具调用记录，无法判断"用过没有"',
+      原因: sess.error,
+      改进: '换成读占用排名的裸数据：cost(action="audit")',
+    }
+  }
+
+  const used = {}
+  for (const row of sess.工具调用.排名) used[row.name] = row.calls
+
+  const candidates = []
+  for (const row of audit.all) {
+    if (row.approxTokens < minTokens) continue
+    if ((used[row.name] || 0) === 0) {
+      candidates.push({ name: row.name, approxTokens: row.approxTokens })
+    }
+  }
+  const saved = candidates.reduce((n, c) => n + c.approxTokens, 0)
+
+  // 按名字前缀归组 —— 能看出"整包"级别的收益（如 task_board_* 一组）
+  const groups = {}
+  for (const c of candidates) {
+    const prefix = c.name.includes('_') ? c.name.split('_')[0] : c.name
+    groups[prefix] = (groups[prefix] || 0) + c.approxTokens
+  }
+  const groupRows = Object.keys(groups)
+    .map((k) => ({ 前缀: k, 可省tokens: groups[k], 个数: candidates.filter((c) => (c.name.split('_')[0] || c.name) === k).length }))
+    .sort((a, b) => b.可省tokens - a.可省tokens)
+
+  return {
+    本会话规模: {
+      事件数: sess.eventCount,
+      轮次: sess.事件构成.turn,
+      工具调用: sess.工具调用.总计,
+      用过的不同工具: sess.工具调用.不同工具数,
+    },
+    上下文总量: audit.totalApproxTokens + ' tokens/请求（' + audit.count + ' 个工具）',
+    建议关闭: candidates,
+    合计可省: saved + ' tokens/请求',
+    按前缀归组: groupRows,
+    判定标准: '占用 >= ' + minTokens + ' tokens 且本会话调用次数为 0',
+    怎么关:
+      '在 设置 → 插件市场（或内置插件）里禁用提供它的插件；' +
+      '也可以从 profile 的 dsh.profile.bundles 里去掉对应包名。',
+    注意:
+      '本会话没调用过 ≠ 永远不需要。如果某个工具你只是这个会话没用，' +
+      '先对照它的用途再决定；关掉后随时可以再开。',
   }
 }
 
@@ -479,15 +627,15 @@ function buildCostTool() {
   return {
     name: 'cost',
     description:
-      '查看 AI 用量与成本，并审计上下文里谁最占地方。' +
-      'action: show=今日/累计用量与成本 / audit=工具 schema 占用排名 / tips=优化建议。',
+      '查看 AI 用量与成本，并审计上下文里谁最占地方、谁可以关掉。' +
+      'action: show=今日/累计用量 / audit=占用排名 / session=本会话工具使用情况 / disable=建议关闭清单 / tips=优化建议。',
     parameters: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['show', 'audit', 'tips'],
-          description: 'show|audit|tips',
+          enum: ['show', 'audit', 'session', 'disable', 'tips'],
+          description: 'show|audit|session|disable|tips',
         },
       },
       required: ['action'],
@@ -502,7 +650,18 @@ function buildCostTool() {
       const action = args && typeof args.action === 'string' ? args.action : ''
 
       if (action === 'audit') {
-        return JSON.stringify(auditToolSchemas(exec), null, 2)
+        const a = auditToolSchemas(exec)
+        // all 是内部用的完整排名，输出时去掉
+        if (a && a.all) delete a.all
+        return JSON.stringify(a, null, 2)
+      }
+
+      if (action === 'session') {
+        return JSON.stringify(analyzeSession(exec), null, 2)
+      }
+
+      if (action === 'disable') {
+        return JSON.stringify(suggestDisable(exec), null, 2)
       }
 
       if (action === 'tips') {
