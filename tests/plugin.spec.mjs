@@ -103,6 +103,66 @@ test('package.json 不声明会阻止安装的 peerDependencies', async () => {
 })
 
 // ---------------------------------------------------------------------------
+// R-011：两个地方说同一件事，就必须有一致性测试
+// ---------------------------------------------------------------------------
+
+test('【R-011】VERSION 文件与 package.json.version 必须一致', () => {
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
+  const fromFile = readFileSync(join(ROOT, 'VERSION'), 'utf8').trim()
+  assert.equal(
+    fromFile,
+    pkg.version,
+    `VERSION（${fromFile}）与 package.json.version（${pkg.version}）不一致 —— 升级时要同时改`
+  )
+})
+
+test('【R-011】源码里不得硬编码版本号（版本只有一个来源）', () => {
+  // 历史：host 的状态路由写 '0.11.0'、client 写 '0.9.0'、VERSION 文件是第三个值。
+  // 用户看到卡片一直显示旧版本，因为升级时只改了 VERSION 文件。
+  // 现在版本只能来自 VERSION（host 用 readOwnVersion 读取，client 由 /status 上报）。
+  const files = [
+    { path: join(ROOT, 'index.mjs'), label: 'index.mjs' },
+    { path: join(ROOT, 'dsh', 'client.js'), label: 'dsh/client.js' },
+  ]
+  // 形如 '0.11.0' 或 "0.9.0" 的字符串字面量（排除注释行）
+  const versionLiteral = /(['"])\d+\.\d+\.\d+\1/
+
+  for (const f of files) {
+    const lines = readFileSync(f.path, 'utf8').split(/\r?\n/)
+    const offenders = []
+    lines.forEach((line, i) => {
+      const trimmed = line.trim()
+      // 跳过注释：// 行、块注释、以及 JSDoc 的 * 行
+      if (
+        trimmed.startsWith('//') ||
+        trimmed.startsWith('*') ||
+        trimmed.startsWith('/*')
+      ) {
+        return
+      }
+      const code = line.split('//')[0]
+      if (!code.trim()) return
+      const m = versionLiteral.exec(code)
+      if (!m) return
+      // '0.0.0' 是"读不到版本"时的兜底值，允许
+      if (m[0].includes('0.0.0')) return
+      offenders.push(`第 ${i + 1} 行: ${trimmed}`)
+    })
+    assert.deepEqual(
+      offenders,
+      [],
+      `${f.label} 里出现了硬编码版本号（应当只从 VERSION 读）:\n` + offenders.join('\n')
+    )
+  }
+})
+
+test('host 通过读 VERSION 文件取版本，而不是写死', () => {
+  const src = readFileSync(join(ROOT, 'index.mjs'), 'utf8')
+  assert.match(src, /function readOwnVersion/, '应有 readOwnVersion 函数')
+  assert.match(src, /readOwnVersion\(\)/, '状态路由应调用它')
+})
+
+// ---------------------------------------------------------------------------
 // 事故防线（二）：不监听任何事件
 // ---------------------------------------------------------------------------
 

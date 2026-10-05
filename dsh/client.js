@@ -30,10 +30,15 @@ window.__ModuleLoader__.load({
     var module = { exports: {} }
     var exports = module.exports
 
-    // 由 host 半在构建/加载时无法提供，这里内联常量。
-    // 状态里的"规则库位置"需要向 host 询问，见 fetchStatus。
+    // 只有包名是客户端需要的常量。
     var PKG = 'agent-development-constraints'
-    var VERSION = '0.9.0'
+
+    // ⚠️ 版本号**不再写死在客户端**。
+    // 之前 host 的状态路由写 '0.11.0'、这里写 '0.9.0'、VERSION 文件是第三个值 ——
+    // 三处漂移导致卡片长期显示旧版本（正是 R-011：两个地方说同一件事）。
+    // 现在版本只有一个来源（host 读 VERSION 文件并经 /status 上报）。
+    // 拿不到状态时显示 '—'，而不是一个可能已经过期的数字。
+    var VERSION_FALLBACK = '—'
 
     /** 从 Host 侧拿运行时状态；失败时返回 null（卡片降级为只显示静态信息） */
     function fetchStatus() {
@@ -245,7 +250,7 @@ window.__ModuleLoader__.load({
                     (status.cwdSource === 'process' ? '（进程 cwd，尚未收到会话消息）' : '')
                 : '（等待宿主上报）'
             ),
-            row('插件版本', (status && status.version) || VERSION),
+            row('插件版本', (status && status.version) || VERSION_FALLBACK),
             status && status.configFile ? row('配置文件', status.configFile) : null,
             err ? row('出错', err) : null
           )

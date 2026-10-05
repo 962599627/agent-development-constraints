@@ -39,8 +39,33 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 
 export const name = 'agent-development-constraints'
+
+/**
+ * 读插件自己的版本。
+ *
+ * ⚠️ 之所以有这个函数：**之前把它硬编码在两处**
+ *   - index.mjs 的状态路由里写了 '0.11.0'
+ *   - dsh/client.js 里写了 '0.9.0'
+ * 而 VERSION 文件是第三个来源。三处必然会漂移 —— 实测就是卡片一直显示旧版本，
+ * 因为升级时只改了 VERSION 文件。
+ *
+ * 这正是 **R-011**（两个地方说同一件事，就必须有一致性测试）。
+ * 现在改为**单一来源**：VERSION 文件（与 index.mjs 同目录），
+ * 并用测试保证 VERSION == package.json.version。
+ */
+function readOwnVersion() {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url))
+    const v = readFileSync(join(here, 'VERSION'), 'utf8').trim()
+    return v || '0.0.0'
+  } catch {
+    // 版本读不到绝不该影响功能
+    return '0.0.0'
+  }
+}
 
 // 声明依赖工具服务：`ctx.tools` 就绪后才会调用 apply。
 // （此前故意不声明、改用 try/catch 探测 —— 结果是 tools 未就绪时静默跳过注册，
@@ -1136,7 +1161,7 @@ export function apply(ctx) {
                 const usage = loadUsage()
                 send(200, {
                   name: 'agent-development-constraints',
-                  version: '0.11.0',
+                  version: readOwnVersion(),
                   constraintsPath: found ? found.path : null,
                   cwd,
                   cwdSource: lastObservedCwd ? 'session' : 'process',
