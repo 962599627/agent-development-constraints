@@ -36,7 +36,20 @@ Set-Location $root
 
 function Fail($msg) {
   Write-Host "  ✗ $msg" -ForegroundColor Red
+  if ($script:lastOutput) {
+    Write-Host "    ── 命令输出 ──" -ForegroundColor DarkGray
+    $script:lastOutput | Select-Object -Last 8 | ForEach-Object {
+      Write-Host "    $_" -ForegroundColor DarkGray
+    }
+  }
+  Write-Host "  提示：若是网络中断（Connection was reset / timeout），重跑本脚本即可。" -ForegroundColor Yellow
   exit 1
+}
+
+# 跑一条原生命令并记下输出，供 Fail() 展示
+function RunNative([scriptblock]$block) {
+  $script:lastOutput = & $block 2>&1
+  return $LASTEXITCODE
 }
 function Ok($msg) {
   Write-Host "  ✓ $msg" -ForegroundColor Green
@@ -97,15 +110,12 @@ if ($exists) {
   # ⚠️ 先推**主分支**，再推标签。
   #    第一版只推标签 —— 标签指向的提交在远端 main 上还不存在，
   #    仓库首页的分支内容与标签不一致。本次真实发版时发现的。
-  git push origin main
-  if ($LASTEXITCODE -ne 0) { Fail "推送 main 失败" }
+  if ((RunNative { git push origin main }) -ne 0) { Fail "推送 main 失败" }
   Ok "已推送 main"
 
-  git tag -a $tag -m "release $version"
-  if ($LASTEXITCODE -ne 0) { Fail "打标签失败" }
+  if ((RunNative { git tag -a $tag -m "release $version" }) -ne 0) { Fail "打标签失败" }
   Ok "已创建标签 $tag"
-  git push origin $tag
-  if ($LASTEXITCODE -ne 0) { Fail "推送标签失败" }
+  if ((RunNative { git push origin $tag }) -ne 0) { Fail "推送标签失败" }
   Ok "已推送标签 $tag"
 }
 
