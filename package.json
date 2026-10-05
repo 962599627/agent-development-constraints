@@ -1,6 +1,6 @@
 {
   "name": "agent-development-constraints",
-  "version": "0.26.6",
+  "version": "0.26.7",
   "description": "Self-evolving development constraints for AI coding agents — installs a rule library and injects it into every step.",
   "keywords": [
     "ai",
@@ -16,6 +16,10 @@
     "dsh-plugin"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
   "bin": {
     "agent-constraints": "bin/cli.js",
     "adc": "bin/cli.js"

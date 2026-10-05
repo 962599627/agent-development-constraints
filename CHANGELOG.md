@@ -8,6 +8,29 @@
 
 ---
 
+## [0.26.7] - 2026-10-05
+
+### 发布目标指向镜像源，`npm publish` 不会发到 npm
+
+**原因**：本机 `~/.npmrc` 配置为 `registry=https://registry.npmmirror.com`（国内镜像），
+`npm publish` 默认使用该配置。
+
+**问题**：`npm publish --dry-run` 显示
+`Publishing to https://registry.npmmirror.com` —— 镜像对普通用户是只读的，
+即使命令"成功"，包也不会出现在 npm 官方源上，
+用户执行 `npx agent-development-constraints` 依然找不到。
+
+**解决方法**：`package.json` 增加
+
+```json
+"publishConfig": { "registry": "https://registry.npmjs.org/", "access": "public" }
+```
+
+只影响**本包的发布目标**，不改变本机镜像配置（安装仍走镜像，速度不受影响）。
+干跑确认：`Publishing to https://registry.npmjs.org/ with tag latest and public access`。
+
+---
+
 ## [0.26.6] - 2026-10-05
 
 ### 脚本把 CHANGELOG 写成 0 字节
