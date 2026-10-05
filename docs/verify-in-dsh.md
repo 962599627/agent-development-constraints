@@ -74,7 +74,9 @@ constraints(action="where")
 constraints(action="path")
 ```
 
-**期望**：返回一句**可操作**的提示（"以 npx agent-development-constraints install 安装"），
+**期望**：返回一句**可操作**的提示
+（安装命令为 `npx github:962599627/agent-development-constraints install` ——
+**必须带 `github:` 前缀**，本包尚未发布到 npm，短形式会 404），
 **而不是报错**。
 
 ### ④ 有规则库时能否真的读到（可选，需要装一份）

@@ -461,7 +461,15 @@ test('未安装指令包时给出可操作的提示，而不是抛错', async ()
   try {
     const msg = await ctx._tools[0].execute({ action: 'show' })
     assert.match(msg, /没有安装 agent-constraints/)
-    assert.match(msg, /npx agent-development-constraints install/)
+    // ⚠️ 断言必须是**真的能跑**的命令。
+    // 原来这里钉的是短形式 `npx agent-development-constraints install`，
+    // 而这个包没发布到 npm（npm view 返回 404）—— 用户照做必然失败。
+    // 现在断言带 github: 前缀的形式（2026-10-05 实测可完整跑通）。
+    assert.match(
+      msg,
+      /npx github:962599627\/agent-development-constraints install/,
+      '未安装提示必须给出可用命令（带 github: 前缀）'
+    )
   } finally {
     process.chdir(prevCwd)
     rmSync(empty, { recursive: true, force: true })
@@ -656,4 +664,107 @@ test('【注入】注入的是**目录**，且体积受控（每会话一次，�
     process.chdir(prevCwd)
     rmSync(project, { recursive: true, force: true })
   }
+})
+
+
+// ---------------------------------------------------------------------------
+// 发布一致性（用户发现："我看有老的版本 也没发布包"）
+//
+// 两个真实问题：
+//   ① git 标签只有 v0.6.0 / v0.7.0 —— GitHub 上只看得见老版本
+//   ② README / 插件提示都在教 `npx agent-development-constraints install`，
+//      而该包**没有发布到 npm**（npm view 返回 404）→ 那条指令不可能成功
+//
+// 下面的断言把那两类漂移钉住。
+// ---------------------------------------------------------------------------
+
+test('【发布】VERSION / package.json / CHANGELOG 首条必须一致', () => {
+  const version = readFileSync(join(ROOT, 'VERSION'), 'utf8').trim()
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
+  assert.equal(pkg.version, version, 'package.json 与 VERSION 不一致')
+
+  // CHANGELOG 最上面那条版本号（发版时最容易忘的就是它）
+  const changelog = readFileSync(join(ROOT, 'CHANGELOG.md'), 'utf8')
+  const first = /^##\s+\[(\d+\.\d+\.\d+)\]/m.exec(changelog)
+  assert.ok(first, 'CHANGELOG 里找不到形如 ## [x.y.z] 的条目')
+  assert.equal(
+    first[1],
+    version,
+    `CHANGELOG 首条是 ${first[1]}，而 VERSION 是 ${version} —— 发版时两个要一起改`
+  )
+})
+
+test('【发布】文档里教给用户的安装命令必须是**能跑**的形式', () => {
+  // 这个包没发布到 npm，所以短形式会 404。
+  // 这里不联网检测 npm（测试要可离线跑），而是断言**文档必须带 github: 前缀** ——
+  // 这正是 2026-10-05 修的那处错误（12 处引用全是短形式）。
+  const docs = ['README.md', 'README.zh-CN.md', 'bin/cli.js', 'docs/verify-in-dsh.md']
+  for (const rel of docs) {
+    const p = join(ROOT, rel)
+    if (!existsSync(p)) continue
+    const lines = readFileSync(p, 'utf8').split(/\r?\n/)
+    lines.forEach((line, i) => {
+      // 只挑"教用户执行"的行（含 npx 且不是解释性文字）
+      if (!/npx\s+agent-development-constraints/.test(line)) return
+      const trimmed = line.trim()
+      // 解释"短形式会失败"的行是允许的（README 的警示块）
+      const isWarning =
+        /fails|失败|404|会失败|必须带/.test(trimmed) || trimmed.startsWith('*') || trimmed.startsWith('//') || trimmed.startsWith('>')
+      assert.ok(
+        isWarning,
+        `${rel} 第 ${i + 1} 行教用户跑短形式 npx 命令，但本包未发布到 npm：\n  ${trimmed}\n` +
+          '请改用 npx github:962599627/agent-development-constraints ...'
+      )
+    })
+  }
+})
+
+test('【发布】README 里列出的 CLI 子命令必须是 cli 真支持的', () => {
+  // R-011：两处说同一件事（CLI 能力 vs 文档）
+  const cli = readFileSync(join(ROOT, 'bin', 'cli.js'), 'utf8')
+  const supported = new Set(
+    [...cli.matchAll(/case\s+'([a-z]+)':/g)].map((m) => m[1])
+  )
+  assert.ok(supported.size > 0, '没能从 cli.js 解析出子命令')
+
+  const readme = readFileSync(join(ROOT, 'README.zh-CN.md'), 'utf8')
+  const documented = new Set(
+    [...readme.matchAll(/agent-development-constraints\s+([a-z]+)/g)].map((m) => m[1])
+  )
+  const unknown = [...documented].filter((c) => c && !supported.has(c))
+  assert.deepEqual(
+    unknown,
+    [],
+    `README 里出现 cli 不支持的子命令：${unknown.join(', ')}（支持：${[...supported].join(', ')}）`
+  )
+})
+
+
+test('【发布】所有 .ps1 必须带 UTF-8 BOM（否则中文乱码 + 解析失败）', () => {
+  // 2026-10-05 我新写的 scripts/release.ps1 漏了 BOM：
+  // Windows PowerShell 5.1 对**无 BOM** 的 .ps1 按 ANSI/GBK 读取，
+  // 中文注释直接变 `锛坱ests/...`，脚本报「字符串缺少终止符」无法执行。
+  //
+  // 规则库里**早就写着**这一条（stacks/shell.md：
+  //   "脚本报语法错误 + 中文乱码（鏅鸿兘） -> .ps1 缺 UTF-8 BOM"），
+  // 我仍然踩了 —— 所以把它变成会失败的测试，而不是继续靠记性。
+  const walk = (dir) => {
+    const out = []
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === '.git' || e.name === 'node_modules') continue
+      const p = join(dir, e.name)
+      if (e.isDirectory()) out.push(...walk(p))
+      else if (e.name.endsWith('.ps1')) out.push(p)
+    }
+    return out
+  }
+  const files = walk(ROOT)
+  assert.ok(files.length > 0, '没找到任何 .ps1')
+  const bad = []
+  for (const p of files) {
+    const buf = readFileSync(p)
+    const hasBom = buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf
+    if (!hasBom) bad.push(p.replace(ROOT + '\\', '').replace(ROOT + '/', ''))
+  }
+  assert.deepEqual(bad, [], `以下 .ps1 缺 UTF-8 BOM（Windows PowerShell 会把中文读成乱码）：\n${bad.join('\n')}`)
 })

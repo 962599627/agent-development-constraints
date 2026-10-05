@@ -1019,7 +1019,16 @@ function buildSymptomBrief(rows) {
 }
 
 /**
- * 未安装时的提示：可操作，而不是报错
+ * 未安装时的提示：可操作，而不是报错。
+ *
+ * ⚠️ 这里必须给**真的能跑**的命令。
+ * 原来写的是 `npx agent-development-constraints install` ——
+ * 而这个包**没有发布到 npm**（`npm view` 返回 404），那条命令必然失败。
+ * 用户看到的是一句"照着做也没用"的提示。
+ *
+ * 实测（2026-10-05）可用的形式是带 `github:` 前缀的：
+ *   npx github:962599627/agent-development-constraints install
+ * 等发布到 npm 之后再换成短形式。
  */
 function notInstalledMessage(cwd) {
   return (
@@ -1027,7 +1036,8 @@ function notInstalledMessage(cwd) {
     cwd +
     ' 向上查找 ' +
     CONSTRAINTS_REL +
-    '）。以 npx agent-development-constraints install 安装。'
+    '）。安装：npx github:962599627/agent-development-constraints install' +
+    '（未发布到 npm，必须带 github: 前缀）'
   )
 }
 

@@ -38,19 +38,28 @@ This package closes the loop `log → rule → enforcement`, and — just as imp
 **One line, no clone needed:**
 
 ```bash
-npx agent-development-constraints install
+npx github:962599627/agent-development-constraints install
 ```
+
+> ⚠️ **The `github:` prefix is required.**
+> This package is **not published to npm yet** (`npm view agent-development-constraints`
+> returns 404), so the shorter `npx agent-development-constraints install` **fails today**.
+> This README used to show the short form — an instruction that could never work.
+> Once it is published the short form becomes valid; until then use the form above.
+>
+> Verified 2026-10-05: `npx github:... install` runs end to end — rules,
+> `.githooks/pre-commit`, the `AGENTS.md` reference and the baseline all land.
 
 That's it — the rules, the workflows and the optional safety net land in
 `./agent-constraints/`, and a reference block is added to your `AGENTS.md`.
 
-Other commands:
+Other commands (same `github:` prefix):
 
 ```bash
-npx agent-development-constraints check        # sanitization check (optional safety net)
-npx agent-development-constraints contribute   # extract the rules *you* added
-npx agent-development-constraints hooks        # enable the pre-commit check
-npx agent-development-constraints help
+npx github:962599627/agent-development-constraints check        # sanitization check (optional safety net)
+npx github:962599627/agent-development-constraints contribute   # extract the rules *you* added
+npx github:962599627/agent-development-constraints hooks        # enable the pre-commit check
+npx github:962599627/agent-development-constraints help
 ```
 
 **Or install from a clone** (same result — the CLI just forwards to these scripts):

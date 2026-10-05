@@ -36,19 +36,28 @@ job.md 写了 538 行开发记录
 **一行命令，不用 clone：**
 
 ```bash
-npx agent-development-constraints install
+npx github:962599627/agent-development-constraints install
 ```
+
+> ⚠️ **这里必须写 `github:` 前缀。**
+> 包**还没有发布到 npm**（`npm view agent-development-constraints` 返回 404），
+> 所以更短的 `npx agent-development-constraints install` **现在会失败**。
+> 之前的 README 一直写着短形式 —— 那是一条**不可能成功的指令**。
+> 等发布到 npm 之后，短形式才可用；在那之前请用上面的 github 形式。
+>
+> 实测（2026-10-05）：`npx github:... install` 能完整跑通 ——
+> 规则库、`.githooks/pre-commit`、`AGENTS.md` 引用、基线都会就位。
 
 就这样 —— 规则库、三套流程、可选的安全网会落到 `./agent-constraints/`，
 并在你的 `AGENTS.md` 里加一段引用。
 
-其余命令：
+其余命令（同样带 `github:` 前缀）：
 
 ```bash
-npx agent-development-constraints check        # 脱敏检查（可选安全网）
-npx agent-development-constraints contribute   # 提取【你】新增的规则
-npx agent-development-constraints hooks        # 启用提交前检查
-npx agent-development-constraints help
+npx github:962599627/agent-development-constraints check        # 脱敏检查（可选安全网）
+npx github:962599627/agent-development-constraints contribute   # 提取【你】新增的规则
+npx github:962599627/agent-development-constraints hooks        # 启用提交前检查
+npx github:962599627/agent-development-constraints help
 ```
 
 **或者从 clone 安装**（效果相同 —— CLI 只是转交给这些脚本）：

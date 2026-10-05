@@ -8,6 +8,73 @@
 
 ---
 
+## [0.26.1] - 2026-10-05
+
+### 修复：安装指令**根本跑不通** + 补发布一致性检查
+
+用户："我看有老的版本 也没发布包"。查证结果**两条都成立**：
+
+| 检查 | 实测结果 |
+|---|---|
+| `git tag -l` | 只有 **v0.6.0 / v0.7.0** → GitHub 上只看得见老版本 |
+| `npm view agent-development-constraints` | **404，这个包从未发布过** |
+
+而 README、插件提示、CLI 注释里一共 **12 处**都在教用户：
+
+```bash
+npx agent-development-constraints install     # ← 不可能成功（包不在 npm 上）
+```
+
+**从第一天起这就是一条照着做也没用的指令。**
+
+### 改了什么
+
+**① 换成实测能跑的安装形式**（2026-10-05 完整验证过）：
+
+```bash
+npx github:962599627/agent-development-constraints install
+```
+
+验证方式不是只看 `help`，而是**真的装进一个空项目**：
+
+```
+✓ 规则库已安装      ✓ 已向 AGENTS.md 注入引用
+✓ 已保存基线（30 条规则）   → 装进去的版本: 0.26.1
+✓ .githooks/pre-commit 已就位
+```
+
+12 处引用全部改掉（README ×2、`index.mjs` 的未安装提示、`bin/cli.js` 用法注释、
+`docs/verify-in-dsh.md`），并在 README 里写明"为什么必须带 `github:` 前缀"。
+
+**② 三条新的发布一致性测试**（防止同类漂移再发生）：
+
+- `VERSION` / `package.json` / **`CHANGELOG` 首条**三处必须一致 ——
+  发版时最容易忘的就是 CHANGELOG
+- 文档里"教用户执行"的命令**不许出现短形式**（附警示说明的行豁免）
+- README 列出的 CLI 子命令必须是 `bin/cli.js` 真支持的（R-011：两处说同一件事）
+
+**已知阳性验证**（按 R-014：新测试必须证明它抓得住）：
+
+```
+往 README 塞一行短形式 npx   -> ✖ 文档里教给用户的安装命令必须是能跑的形式
+把 CHANGELOG 首条改成 9.9.9  -> ✖ CHANGELOG 首条是 9.9.9，而 VERSION 是 0.26.1
+还原后                       -> ✔ 29/29
+```
+
+**③ 新增发版脚本 `scripts/release.ps1` / `release.sh`**：
+测试 → 脱敏 → 三处版本一致性 → 工作区干净 → 打标签并推送 → 打印
+GitHub Release 与 `npm publish` 的步骤。支持 `-DryRun` / `--dry-run`。
+把"忘了打标签、忘了发版、忘了改 CHANGELOG"变成一条命令。
+
+### ⚠️ 还需要主账号操作（脚本不代替）
+1. **`npm login` + `npm publish`** —— 本机 `npm whoami` 报 `ENEEDAUTH`，包未发布
+2. **GitHub Release** —— `gh` CLI 未安装，标签已推送但 Release 条目需在网页创建
+   （或装 `gh` 后用 `gh release create`）
+
+`npm test` **29/29 通过**。
+
+---
+
 ## [0.26.0] - 2026-10-05
 
 ### 新增：按症状查的**目录** —— 插件从「拉取式提醒」改成「带索引的书」

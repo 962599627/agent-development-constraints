@@ -11,11 +11,15 @@
  * 在 npx 场景下那是 npm 缓存目录，所以必须在**目标项目**里自己实现。
  *
  * 用法：
- *   npx agent-development-constraints install [目标目录]
- *   npx agent-development-constraints check   [目标目录]
- *   npx agent-development-constraints contribute [目标目录]
- *   npx agent-development-constraints hooks   [目标目录]
- *   npx agent-development-constraints version
+ *   npx github:962599627/agent-development-constraints install [目标目录]
+ *   npx github:962599627/agent-development-constraints check   [目标目录]
+ *   npx github:962599627/agent-development-constraints contribute [目标目录]
+ *   npx github:962599627/agent-development-constraints hooks   [目标目录]
+ *   npx github:962599627/agent-development-constraints version
+ *
+ * ⚠️ 必须带 `github:` 前缀 —— 本包**未发布到 npm**，
+ *    短形式 `npx agent-development-constraints ...` 会 404。
+ *    这里的用法串与 README 保持一致（两处说同一件事），改动时一起改。
  */
 
 const fs = require('fs');
