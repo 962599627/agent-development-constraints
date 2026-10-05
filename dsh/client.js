@@ -134,6 +134,10 @@ window.__ModuleLoader__.load({
         var tickState = react.useState(0)
         var tick = tickState[0]
         var setTick = tickState[1]
+        // 诊断：卡片**实际拿到**的原始字段（见 load() 里的说明）
+        var diagState = react.useState(null)
+        var diag = diagState[0]
+        var setDiag = diagState[1]
 
         /**
          * 拉状态，并在**数据还不完整时自动重试**。
@@ -157,6 +161,22 @@ window.__ModuleLoader__.load({
                 .then(function (s) {
                   if (!alive) return
                   setStatus(s)
+                  // 诊断：记下**卡片实际拿到的**原始字段。
+                  // ⚠️ 为什么需要它：状态路由（curl）返回的是正确的
+                  // cwd=F:\python2 / cwdSource=session / contextAudit 有值，
+                  // 但卡片显示的是旧的 —— 两者矛盾，而我看不到卡片这一侧。
+                  // 有了这行就能区分三种情况：
+                  //   ① 时间在变、字段是旧的  -> 请求到了但 host 返回旧值
+                  //   ② 时间不变              -> 请求根本没发生
+                  //   ③ 字段是对的但没渲染    -> 渲染逻辑的 bug
+                  setDiag({
+                    at: new Date().toLocaleTimeString(),
+                    null: !s,
+                    cwd: (s && s.cwd) || null,
+                    cwdSource: (s && s.cwdSource) || null,
+                    hasAudit: Boolean(s && s.contextAudit),
+                    version: (s && s.version) || null,
+                  })
                   // 数据齐全（或取不到状态）就停
                   var complete = s && s.contextAudit && s.cwdSource === 'session'
                   if (!complete && tries < 10) {
@@ -333,6 +353,38 @@ window.__ModuleLoader__.load({
             err ? row('出错', err) : null
           )
         )
+
+        // ---------- 诊断行 ----------
+        // 只在数据不完整时显示：把"卡片实际拿到了什么"摆出来。
+        // 数据齐全时自动消失，不干扰正常使用。
+        var incomplete = !status || !status.contextAudit || status.cwdSource !== 'session'
+        if (diag && incomplete) {
+          children.push(
+            h(
+              'div',
+              {
+                key: 'diag',
+                style: {
+                  marginTop: '8px',
+                  padding: '8px 10px',
+                  border: '1px dashed ' + palette.border,
+                  borderRadius: '8px',
+                  color: palette.dim,
+                  fontSize: '11px',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  lineHeight: '1.6',
+                },
+              },
+              '诊断（数据未完整，此处显示卡片实际拿到的原始值）',
+              h('br'),
+              '拉取于 ' + diag.at + '　version=' + diag.version,
+              h('br'),
+              'cwd=' + (diag.cwd || 'null') + '　cwdSource=' + (diag.cwdSource || 'null'),
+              h('br'),
+              'hasAudit=' + diag.hasAudit + '　status=' + (diag.null ? 'null' : 'ok')
+            )
+          )
+        }
 
         // ---------- 成本 ----------
         // 数据来自 DSH 自己的用量账本（usage-ledger.json），只读不改。
