@@ -59,7 +59,8 @@ export const inject = ['tools']
  */
 function writeProbe(stage, extra) {
   try {
-    const info = {
+    const file = join(homedir(), '.dsh', 'agent-constraints-probe.json')
+    const entry = {
       stage,
       time: new Date().toISOString(),
       node: process.version,
@@ -67,11 +68,21 @@ function writeProbe(stage, extra) {
       pid: process.pid,
       ...extra,
     }
-    writeFileSync(
-      join(homedir(), '.dsh', 'agent-constraints-probe.json'),
-      JSON.stringify(info, null, 2),
-      'utf8'
-    )
+    // 累积而不是覆盖：一次启动里 apply 可能走多条注册路线，
+    // 只看最后一条会漏掉"哪条真的成功了"。
+    let history = []
+    try {
+      if (existsSync(file)) {
+        const prev = JSON.parse(readFileSync(file, 'utf8'))
+        history = Array.isArray(prev) ? prev : [prev]
+      }
+    } catch {
+      history = []
+    }
+    history.push(entry)
+    // 只保留最近 20 条，避免无限增长
+    if (history.length > 20) history = history.slice(-20)
+    writeFileSync(file, JSON.stringify(history, null, 2), 'utf8')
   } catch {
     // 探针失败绝不影响插件
   }
@@ -298,28 +309,64 @@ export function apply(ctx) {
     hasTools: Boolean(ctx && ctx.tools),
     toolsKeys: ctx && ctx.tools ? Object.keys(ctx.tools) : null,
     hasOn: Boolean(ctx && typeof ctx.on === 'function'),
+    hasInjectFn: Boolean(ctx && typeof ctx.inject === 'function'),
   })
 
-  try {
-    if (ctx && ctx.tools && typeof ctx.tools.register === 'function') {
-      ctx.tools.register(buildConstraintsTool())
-      writeProbe('tool-registered', {
-        hasTools: true,
-        toolsKeys: Object.keys(ctx.tools),
-      })
-    } else {
-      // 这条分支以前是静默的 —— 正是"工具不出现却没线索"的根源
-      writeProbe('tool-register-skipped', {
-        reason: !ctx ? 'ctx 为空' : !ctx.tools ? 'ctx.tools 不存在' : 'ctx.tools.register 不是函数',
-        ctxKeys: ctx ? Object.keys(ctx) : null,
-        toolsKeys: ctx && ctx.tools ? Object.keys(ctx.tools) : null,
-      })
-    }
-  } catch (err) {
-    // 注册失败只让工具不可用，绝不影响会话
-    writeProbe('tool-register-failed', { error: err && err.message })
+  /** 在给定作用域里注册工具；成功/失败都记探针 */
+  function registerTool(scope, via) {
     try {
-      console.warn('[agent-constraints] 工具注册失败（插件降级，会话不受影响）:', err && err.message)
-    } catch {}
+      if (scope && scope.tools && typeof scope.tools.register === 'function') {
+        scope.tools.register(buildConstraintsTool())
+        writeProbe('tool-registered', {
+          via,
+          hasTools: true,
+          toolsKeys: Object.keys(scope.tools),
+        })
+        return true
+      }
+      writeProbe('tool-register-skipped', {
+        via,
+        reason: !scope ? '作用域为空' : !scope.tools ? 'scope.tools 不存在' : 'scope.tools.register 不是函数',
+        scopeKeys: scope ? Object.keys(scope) : null,
+      })
+      return false
+    } catch (err) {
+      writeProbe('tool-register-failed', { via, error: err && err.message })
+      return false
+    }
   }
+
+  // ---------- 路线 A：回调式注入（dshmarket 用的方式）----------
+  //
+  // 实测教训：只靠 `export const inject = ['tools']` 时，apply 拿到的 ctx
+  // **只有 `on`**（`ctx.tools` 不存在）——探针文件里写得很清楚：
+  //   { "stage": "tool-register-skipped", "reason": "ctx.tools 不存在",
+  //     "ctxKeys": ["on"] }
+  // 而 dshmarket 是用 `ctx.inject([...], (scope) => ...)` 拿到服务的。
+  // 两条路都走，哪条成功由探针记录（via 字段）。
+  if (ctx && typeof ctx.inject === 'function') {
+    try {
+      let settled = false
+      const ret = ctx.inject(['tools'], (scope) => {
+        settled = true
+        registerTool(scope, 'ctx.inject-callback')
+      })
+      // inject 可能返回 Promise（服务未就绪时）
+      if (ret && typeof ret.then === 'function') {
+        ret.then(
+          () => {
+            if (!settled) {
+              writeProbe('inject-callback-pending', { note: 'ctx.inject 返回的 Promise 已 settle，但回调未同步触发' })
+            }
+          },
+          (err) => writeProbe('inject-callback-rejected', { error: err && err.message })
+        )
+      }
+    } catch (err) {
+      writeProbe('inject-callback-threw', { error: err && err.message })
+    }
+  }
+
+  // ---------- 路线 B：直接注册（服务已就绪时的快路）----------
+  registerTool(ctx, 'direct')
 }
