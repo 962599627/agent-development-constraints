@@ -29,7 +29,7 @@
 -----BEGIN [A-Z ]*PRIVATE KEY-----
 
 # 常见凭据文件的引用（这种文件不该被提交）
-(?i)(mysqlpassword|\.env\.temp|credentials\.json|id_rsa)
+(?i)(^|[/\\])(mysqlpassword|\.env\.temp|credentials\.json|id_rsa)
 
 # ============================================================
 # 本地路径 —— 会暴露用户名、目录结构、项目位置

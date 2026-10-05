@@ -1,7 +1,7 @@
 {
   "name": "agent-development-constraints",
-  "version": "0.7.0",
-  "description": "Self-evolving development constraints for AI coding agents — turn the mistakes you actually hit into rules that fire next time.",
+  "version": "0.8.0",
+  "description": "Self-evolving development constraints for AI coding agents — installs a rule library and injects it into every step.",
   "keywords": [
     "ai",
     "agent",
@@ -12,14 +12,36 @@
     "rules",
     "conventions",
     "code-review",
-    "lessons-learned"
+    "lessons-learned",
+    "dsh-plugin"
   ],
   "license": "MIT",
   "bin": {
     "agent-constraints": "bin/cli.js",
     "adc": "bin/cli.js"
   },
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    }
+  },
   "files": [
+    "index.mjs",
+    "cordis.patch.yml",
     "bin/",
     "core/",
     "templates/",
@@ -40,7 +62,7 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=14"
+    "node": ">=18"
   },
   "repository": {
     "type": "git",
@@ -51,6 +73,6 @@
     "url": "https://github.com/962599627/agent-development-constraints/issues"
   },
   "scripts": {
-    "test": "node bin/cli.js version"
+    "test": "node tests/plugin.spec.mjs"
   }
 }

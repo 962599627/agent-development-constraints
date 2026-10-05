@@ -1,0 +1,7 @@
+# DSH bundle patch —— 把这个包插进 profile 的层栈
+#
+# 一行 insert 就够：id 是行标识（可被用户的 profile patch 覆盖），
+# name 是包名 —— Node 解析会从已安装的包找到我们的入口。
+- insert:
+    - id: agent-development-constraints
+      name: agent-development-constraints
